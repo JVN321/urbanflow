@@ -122,7 +122,7 @@ class SimulationResult(BaseModel):
 
 
 class InterventionAction(BaseModel):
-    action: Literal["WIDEN", "CLOSE", "ADD", "SPEED_LIMIT"]
+    action: Literal["WIDEN", "CLOSE", "OPEN", "ADD", "SPEED_LIMIT"]
     edge_id: Optional[str] = None
     new_lanes: Optional[int] = None
     new_capacity_vph: Optional[float] = None

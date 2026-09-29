@@ -1,790 +1,375 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import L from 'leaflet';
+import { Layers, Play, RotateCcw, Sliders, Zap, Plus, Ban, LocateFixed, Map, Route } from 'lucide-react';
 import {
-  Activity,
-  Play,
-  Zap,
-  Sliders,
-  Settings2,
-  AlertTriangle,
-  RotateCcw,
-  CheckCircle2,
-  GitFork
-} from 'lucide-react';
-import {
-  UrbanFlowGraph,
-  SimulationResult,
-  InterventionReport,
-  InterventionAction,
-  OptimizationResult,
-  SimulationConfig
-} from './types';
-import {
-  fetchGraph,
-  runSimulation,
   evaluateIntervention,
-  fetchOptimizationRecommendations,
-  MOCK_BRAESS_BASELINE_GRAPH
+  fetchGraph,
+  importOSMPlace,
+  analyzeArea,
+  startOptimizationStream,
+  SimulationProgressEvent,
+  startSimulationStream
 } from './services/api';
+import {
+  GraphEdge,
+  InterventionAction,
+  InterventionReport,
+  OptimizationResult,
+  SimulationConfig,
+  SimulationResult,
+  UrbanFlowGraph
+} from './types';
+import 'leaflet/dist/leaflet.css';
+
+const TILE_URL = import.meta.env.VITE_MAP_TILE_URL || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+const scenarios = [
+  ['braess_4node', 'Classic Braess paradox'],
+  ['expanded_8node', 'Expanded multi-hub'],
+  ['grid_3x3', '3x3 urban grid'],
+  ['bottleneck_bridge', 'Bottleneck bridge'],
+  ['kochi_central', 'Kochi arterial network']
+];
+
+function edgeColor(vc: number, closed = false, widened = false) {
+  if (closed) return '#94a3b8';
+  if (widened) return '#2563eb';
+  if (vc >= 0.95) return '#dc2626';
+  if (vc >= 0.75) return '#d97706';
+  return '#059669';
+}
+
+function edgePath(graph: UrbanFlowGraph, edge: GraphEdge): L.LatLngExpression[] {
+  if (edge.geometry?.length) return edge.geometry.map(([lng, lat]) => [lat, lng]);
+  const source = graph.nodes.find((node) => node.id === edge.source);
+  const target = graph.nodes.find((node) => node.id === edge.target);
+  return source && target ? [[source.lat, source.lng], [target.lat, target.lng]] : [];
+}
 
 export default function App() {
-  const [selectedScenario, setSelectedScenario] = useState<string>('braess_4node');
-  const [graph, setGraph] = useState<UrbanFlowGraph>(MOCK_BRAESS_BASELINE_GRAPH);
-  const [demandMultiplier, setDemandMultiplier] = useState<number>(1.0);
-  const [activeInterventions, setActiveInterventions] = useState<InterventionAction[]>([]);
-  const [simulationResult, setSimulationResult] = useState<SimulationResult | null>(null);
-  const [interventionReport, setInterventionReport] = useState<InterventionReport | null>(null);
-  const [optimizationResult, setOptimizationResult] = useState<OptimizationResult | null>(null);
+  const [scenario, setScenario] = useState('kochi_central');
+  const [importedScenario, setImportedScenario] = useState<[string, string] | null>(null);
+  const [importingPlace, setImportingPlace] = useState(false);
+  const [viewMode, setViewMode] = useState<'live' | 'graph'>('live');
+  const [livePlace, setLivePlace] = useState<'kochi' | 'new_york' | 'custom'>('kochi');
+  const [graph, setGraph] = useState<UrbanFlowGraph | null>(null);
+  const [simulation, setSimulation] = useState<SimulationResult | null>(null);
+  const [progress, setProgress] = useState<SimulationProgressEvent | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [isOptimizing, setIsOptimizing] = useState<boolean>(false);
-  const [showConfigDrawer, setShowConfigDrawer] = useState<boolean>(false);
-  const [showParticles, setShowParticles] = useState<boolean>(true);
-  const [particleSpeed, setParticleSpeed] = useState<number>(1.2);
+  const [interventions, setInterventions] = useState<InterventionAction[]>([]);
+  const [report, setReport] = useState<InterventionReport | null>(null);
+  const [optimization, setOptimization] = useState<OptimizationResult | null>(null);
+  const [discoveredRecommendations, setDiscoveredRecommendations] = useState<OptimizationResult['recommendations']>([]);
+  const [optimizationProgress, setOptimizationProgress] = useState({ current: 0, total: 0 });
+  const [showNames, setShowNames] = useState(true);
+  const [monochrome, setMonochrome] = useState(false);
+  const [showBasemap, setShowBasemap] = useState(true);
+  const [showFlow, setShowFlow] = useState(true);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [analysisScope, setAnalysisScope] = useState<'network' | 'area'>('network');
+  const [areaMode, setAreaMode] = useState(false);
+  const [areaId, setAreaId] = useState<string | null>(null);
+  const [demandMultiplier, setDemandMultiplier] = useState(1);
+  const [config, setConfig] = useState<SimulationConfig>({ algorithm: 'msa', max_iterations: 30, convergence_tolerance: 0.001, default_alpha: 0.15, default_beta: 4, cost_model: 'bpr' });
+  const [loading, setLoading] = useState(false);
+  const [optimizing, setOptimizing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const mapRef = useRef<HTMLDivElement>(null);
+  const mapInstance = useRef<L.Map | null>(null);
+  const layerGroup = useRef<L.LayerGroup | null>(null);
+  const flowLayerGroup = useRef<L.LayerGroup | null>(null);
+  const tileLayer = useRef<L.TileLayer | null>(null);
+  const stopStream = useRef<(() => void) | null>(null);
+  const stopOptimizer = useRef<(() => void) | null>(null);
+  const areaRect = useRef<L.Rectangle | null>(null);
+  const areaModeRef = useRef(false);
 
-  // Engine Configuration State
-  const [engineConfig, setEngineConfig] = useState<SimulationConfig>({
-    algorithm: 'msa',
-    max_iterations: 40,
-    convergence_tolerance: 0.0001,
-    default_alpha: 0.15,
-    default_beta: 4.0,
-    cost_model: 'bpr'
-  });
+  const runLiveSimulation = (graphId: string, nextConfig = config) => {
+    stopStream.current?.();
+    setLoading(true);
+    setProgress(null);
+    setError(null);
+    stopStream.current = startSimulationStream(graphId, demandMultiplier, nextConfig,
+      (event) => setProgress(event),
+      (result) => {
+        setSimulation(result);
+        setLoading(false);
+        setProgress(null);
+      },
+      (streamError) => {
+        setError(streamError.message);
+        setLoading(false);
+      });
+  };
+
+  const handleLivePlaceChange = async (place: 'kochi' | 'new_york' | 'custom') => {
+    setLivePlace(place);
+    if (place === 'custom') {
+      setViewMode('live');
+      setAreaMode(true);
+      return;
+    }
+    if (place === 'kochi') {
+      setViewMode('live');
+      setScenario('kochi_central');
+      return;
+    }
+    setImportingPlace(true);
+    setError(null);
+    try {
+      const imported = await importOSMPlace({ place: 'New York, New York, USA', network_type: 'drive', demand_multiplier: demandMultiplier, config });
+      setImportedScenario([imported.graph.graph_id, imported.graph.name]);
+      setScenario(imported.graph.graph_id);
+      setGraph(imported.graph);
+      setSimulation(imported.result);
+      setAnalysisScope('network');
+    } catch (importError) {
+      setError((importError as Error).message);
+    } finally {
+      setImportingPlace(false);
+    }
+  };
 
   useEffect(() => {
-    loadGraphData(selectedScenario);
-  }, [selectedScenario]);
+    let active = true;
+    setGraph(null);
+    setSimulation(null);
+    setInterventions([]);
+    setReport(null);
+    setOptimization(null);
+    setDiscoveredRecommendations([]);
+    setAreaId(null);
+    setAnalysisScope('network');
+    fetchGraph(scenario).then((data) => {
+      if (!active) return;
+      setGraph(data);
+      runLiveSimulation(data.graph_id);
+    }).catch((loadError: Error) => active && setError(loadError.message));
+    return () => { active = false; stopStream.current?.(); };
+  }, [scenario]);
 
-  const loadGraphData = async (graphId: string) => {
-    setIsLoading(true);
-    setActiveInterventions([]);
-    setInterventionReport(null);
-    setOptimizationResult(null);
-    setSelectedEdgeId(null);
+  useEffect(() => {
+    areaModeRef.current = areaMode;
+  }, [areaMode]);
 
-    const data = await fetchGraph(graphId);
-    setGraph(data);
+  useEffect(() => {
+    if (!mapRef.current || mapInstance.current) return;
+    const map = L.map(mapRef.current, { zoomControl: true, preferCanvas: true, attributionControl: true }).setView([9.9816, 76.2999], 12);
+    mapInstance.current = map;
+    map.dragging.disable();
+    layerGroup.current = L.layerGroup().addTo(map);
+    flowLayerGroup.current = L.layerGroup().addTo(map);
+    requestAnimationFrame(() => map.invalidateSize({ pan: false }));
+    const container = map.getContainer();
+    let panStart: { x: number; y: number } | null = null;
+    const onPointerDown = (event: PointerEvent) => {
+      if (areaModeRef.current || event.button !== 0) return;
+      panStart = { x: event.clientX, y: event.clientY };
+      container.setPointerCapture?.(event.pointerId);
+      container.style.cursor = 'grabbing';
+    };
+    const onPointerMove = (event: PointerEvent) => {
+      if (!panStart || areaModeRef.current) return;
+      const dx = event.clientX - panStart.x;
+      const dy = event.clientY - panStart.y;
+      if (dx === 0 && dy === 0) return;
+      map.panBy([-dx, -dy], { animate: false });
+      panStart = { x: event.clientX, y: event.clientY };
+    };
+    const onPointerUp = (event: PointerEvent) => {
+      panStart = null;
+      container.releasePointerCapture?.(event.pointerId);
+      container.style.cursor = '';
+    };
+    container.addEventListener('pointerdown', onPointerDown);
+    container.addEventListener('pointermove', onPointerMove);
+    container.addEventListener('pointerup', onPointerUp);
+    container.addEventListener('pointercancel', onPointerUp);
+    const cleanup = (): void => {
+      container.removeEventListener('pointerdown', onPointerDown);
+      container.removeEventListener('pointermove', onPointerMove);
+      container.removeEventListener('pointerup', onPointerUp);
+      container.removeEventListener('pointercancel', onPointerUp);
+      map.off();
+      map.remove();
+      mapInstance.current = null;
+      layerGroup.current = null;
+    };
+    return cleanup;
+  }, []);
 
-    const sim = await runSimulation(graphId, demandMultiplier, engineConfig);
-    setSimulationResult(sim);
-    setIsLoading(false);
-  };
-
-  const handleRunSimulation = async () => {
-    setIsLoading(true);
-    if (activeInterventions.length > 0) {
-      const report = await evaluateIntervention({
-        base_graph_id: selectedScenario,
-        demand_multiplier: demandMultiplier,
-        modifications: activeInterventions,
-        config: engineConfig
-      });
-      setInterventionReport(report);
-      setSimulationResult(report.intervention);
+  useEffect(() => {
+    const map = mapInstance.current;
+    if (!map) return;
+    map.dragging.disable();
+    if (areaMode) {
+      map.scrollWheelZoom.disable();
     } else {
-      const sim = await runSimulation(selectedScenario, demandMultiplier, engineConfig);
-      setSimulationResult(sim);
-      setInterventionReport(null);
+      map.scrollWheelZoom.enable();
     }
-    setIsLoading(false);
-  };
-
-  const handleRunOptimizer = async () => {
-    setIsOptimizing(true);
-    const opt = await fetchOptimizationRecommendations(selectedScenario, demandMultiplier, engineConfig);
-    setOptimizationResult(opt);
-    setIsOptimizing(false);
-  };
-
-  const handleApplyOptimizerRecommendation = (action: InterventionAction) => {
-    // Add action to staged interventions and trigger simulation
-    const updated = [...activeInterventions, action];
-    setActiveInterventions(updated);
-    evaluateIntervention({
-      base_graph_id: selectedScenario,
-      demand_multiplier: demandMultiplier,
-      modifications: updated,
-      config: engineConfig
-    }).then(report => {
-      setInterventionReport(report);
-      setSimulationResult(report.intervention);
-    });
-  };
-
-  const toggleBraessShortcut = () => {
-    const hasShortcut = activeInterventions.some(m => m.action === 'ADD' && m.new_edge?.id === 'e_BC');
-    if (hasShortcut) {
-      const updated = activeInterventions.filter(m => !(m.action === 'ADD' && m.new_edge?.id === 'e_BC'));
-      setActiveInterventions(updated);
-    } else {
-      const newEdge = {
-        id: 'e_BC',
-        source: 'B',
-        target: 'C',
-        name: 'B ➔ C (Zero-Cost Shortcut)',
-        length_m: 100,
-        lanes: 4,
-        free_speed_kmh: 100,
-        capacity_vph: 10000,
-        geometry: [[76.320, 10.020], [76.320, 9.980]]
+    const onMouseDown = (event: L.LeafletMouseEvent) => {
+      if (!areaMode) return;
+      event.originalEvent.preventDefault();
+      event.originalEvent.stopPropagation();
+      const start = event.latlng;
+      const move = (moveEvent: L.LeafletMouseEvent) => {
+        areaRect.current?.remove();
+        areaRect.current = L.rectangle(L.latLngBounds(start, moveEvent.latlng), { color: '#172033', weight: 2, fillOpacity: 0.08 }).addTo(map);
       };
-      setActiveInterventions([...activeInterventions, { action: 'ADD', new_edge: newEdge }]);
+      const end = async (endEvent: L.LeafletMouseEvent) => {
+        map.off('mousemove', move); map.off('mouseup', end);
+        const bounds = L.latLngBounds(start, endEvent.latlng);
+        if (bounds.getNorthEast().equals(bounds.getSouthWest())) return;
+        try {
+          setLoading(true); setError(null);
+          const analyzed = await analyzeArea({ graph_id: graph?.graph_id || scenario, min_lat: bounds.getSouth(), min_lng: bounds.getWest(), max_lat: bounds.getNorth(), max_lng: bounds.getEast(), demand_multiplier: demandMultiplier, config, fetch_osm: true });
+          setAreaId(analyzed.area_id); setGraph(analyzed.graph); setSimulation(analyzed.result); setAnalysisScope('area'); setAreaMode(false);
+        } catch (analysisError) { setError((analysisError as Error).message); }
+        finally { setLoading(false); }
+      };
+      map.on('mousemove', move); map.on('mouseup', end);
+    };
+    map.on('mousedown', onMouseDown);
+    return () => {
+      map.off('mousedown', onMouseDown);
+      map.scrollWheelZoom.enable();
+    };
+  }, [areaMode, scenario, demandMultiplier, config, graph?.graph_id]);
+
+  useEffect(() => {
+    const map = mapInstance.current;
+    if (!map) return;
+    if (scenario === 'kochi_central' && showBasemap) {
+      if (!tileLayer.current) tileLayer.current = L.tileLayer(TILE_URL, { maxZoom: 19, attribution: import.meta.env.VITE_MAP_ATTRIBUTION || '&copy; OpenStreetMap contributors' }).addTo(map);
+    } else {
+      tileLayer.current?.remove();
+      tileLayer.current = null;
+    }
+  }, [scenario, showBasemap]);
+
+  useEffect(() => {
+    const map = mapInstance.current;
+    const layers = layerGroup.current;
+    if (!map || !layers || !graph) return;
+    layers.clearLayers();
+    const bounds = L.latLngBounds([]);
+    graph.nodes.forEach((node) => bounds.extend([node.lat, node.lng]));
+    graph.edges.forEach((edge) => {
+      const points = edgePath(graph, edge);
+      if (points.length < 2) return;
+      points.forEach((point) => bounds.extend(point));
+      const metric = simulation?.edge_metrics[edge.id];
+      const volume = metric?.volume_vph ?? progress?.edge_volumes[edge.id] ?? 0;
+      const edgeActions = interventions.filter((action) => action.edge_id === edge.id);
+      const closed = edgeActions.length > 0 && edgeActions[edgeActions.length - 1].action === 'CLOSE';
+      const widened = interventions.some((action) => action.action === 'WIDEN' && action.edge_id === edge.id);
+      const vc = metric?.vc_ratio ?? volume / Math.max(edge.capacity_vph, 1);
+      const recommendation = (optimization?.recommendations || discoveredRecommendations).find((item) => item.edge_id === edge.id);
+      const line = L.polyline(points, { color: monochrome ? '#334155' : edgeColor(vc, closed, widened), weight: selectedEdgeId === edge.id ? 8 : Math.max(3, Math.min(9, edge.lanes + 1)), opacity: closed ? 0.45 : 0.88, dashArray: closed ? '8 7' : undefined });
+      if (showNames) line.bindTooltip(`${edge.name || edge.id} | ${Math.round(volume).toLocaleString()} vph`, { sticky: true });
+      line.bindPopup(`<strong>${edge.name || edge.id}</strong><br>${edge.source} → ${edge.target}<br>Vehicles: ${Math.round(volume).toLocaleString()} vph<br>Road capacity: ${Math.round(edge.capacity_vph).toLocaleString()} vph<br>Lanes: ${edge.lanes}<br>V/C: ${vc.toFixed(2)}${recommendation ? `<br><b>Optimizer: ${recommendation.type === 'REMOVE_ROAD' ? 'CLOSE' : 'WIDEN'}</b>` : ''}`);
+      line.on('click', () => setSelectedEdgeId(edge.id));
+      line.addTo(layers);
+      if (recommendation) {
+        line.setStyle({ color: recommendation.type === 'REMOVE_ROAD' ? '#dc2626' : '#2563eb', weight: 9, dashArray: recommendation.type === 'REMOVE_ROAD' ? '10 6' : undefined });
+      }
+    });
+    graph.nodes.forEach((node) => {
+      const marker = L.circleMarker([node.lat, node.lng], { radius: node.type === 'intersection' ? 4 : 7, color: '#172033', weight: 1, fillColor: node.type === 'origin' ? '#2563eb' : node.type === 'destination' ? '#059669' : '#ffffff', fillOpacity: 1 });
+      if (showNames) marker.bindTooltip(node.label || node.id);
+      marker.addTo(layers);
+    });
+    if (bounds.isValid() && map.getZoom() < 3) map.fitBounds(bounds.pad(0.08), { maxZoom: graph.nodes.length > 50 ? 15 : 14 });
+  }, [graph, simulation, progress, selectedEdgeId, interventions, optimization, discoveredRecommendations, showNames, monochrome]);
+
+  useEffect(() => {
+    const layers = flowLayerGroup.current;
+    if (!layers || !graph || !showFlow) return;
+    layers.clearLayers();
+    let frame = 0;
+    const particles: Array<{ marker: L.CircleMarker; points: L.LatLngExpression[]; offset: number }> = [];
+    graph.edges.forEach((edge, edgeIndex) => {
+      const metric = simulation?.edge_metrics[edge.id];
+      const volume = metric?.volume_vph ?? progress?.edge_volumes[edge.id] ?? 0;
+      const points = edgePath(graph, edge);
+      if (volume <= 0 || points.length < 2) return;
+      const marker = L.circleMarker(points[0], { radius: 3, color: '#0f172a', weight: 1, fillColor: monochrome ? '#334155' : edgeColor(metric?.vc_ratio ?? 0), fillOpacity: 1 }).addTo(layers);
+      particles.push({ marker, points, offset: (edgeIndex * 0.17) % 1 });
+    });
+    const animate = () => {
+      frame = window.requestAnimationFrame(animate);
+      const now = (Date.now() % 5000) / 5000;
+      particles.forEach(({ marker, points, offset }) => {
+        const position = (now + offset) % 1;
+        const segment = Math.min(points.length - 2, Math.floor(position * (points.length - 1)));
+        const local = position * (points.length - 1) - segment;
+        const a = L.latLng(points[segment]); const b = L.latLng(points[segment + 1]);
+        marker.setLatLng([a.lat + (b.lat - a.lat) * local, a.lng + (b.lng - a.lng) * local]);
+      });
+    };
+    animate();
+    return () => { window.cancelAnimationFrame(frame); layers.clearLayers(); };
+  }, [graph, simulation, progress, showFlow, monochrome]);
+
+  const selectedEdge = graph?.edges.find((edge) => edge.id === selectedEdgeId);
+  const selectedMetric = selectedEdgeId ? simulation?.edge_metrics[selectedEdgeId] : undefined;
+
+  const applyActions = async (actions: InterventionAction[]) => {
+    if (!graph) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const nextReport = await evaluateIntervention({ base_graph_id: graph.graph_id, demand_multiplier: demandMultiplier, modifications: actions, config });
+      setInterventions(actions);
+      setReport(nextReport);
+      setSimulation(nextReport.intervention);
+    } catch (actionError) { setError((actionError as Error).message); }
+    finally { setLoading(false); }
+  };
+
+  const handleOptimizer = () => {
+    const targetGraphId = analysisScope === 'area' && areaId ? areaId : scenario;
+    stopOptimizer.current?.();
+    setOptimizing(true); setError(null); setOptimization(null); setDiscoveredRecommendations([]); setOptimizationProgress({ current: 0, total: 0 });
+    stopOptimizer.current = startOptimizationStream(targetGraphId, demandMultiplier, config,
+      (event) => setOptimizationProgress({ current: event.current, total: event.total }),
+      (recommendation) => setDiscoveredRecommendations((current) => [...current, recommendation]),
+      (result) => { setOptimization(result); setOptimizing(false); },
+      (optimizerError: Error) => { setError(optimizerError.message); setOptimizing(false); });
+  };
+
+  const applyAllRecommendations = () => {
+    const recommendations = optimization?.recommendations || discoveredRecommendations;
+    if (recommendations.length > 0) applyActions(recommendations.map((recommendation) => recommendation.action));
+  };
+
+  const clearAreaSelection = () => {
+    areaRect.current?.remove();
+    areaRect.current = null;
+    setAreaId(null);
+    setAnalysisScope('network');
+    setAreaMode(false);
+    if (graph?.graph_id.includes('_area_')) {
+      fetchGraph(scenario).then((data) => { setGraph(data); runLiveSimulation(data.graph_id); });
     }
   };
 
-  const handleWidenSelectedRoad = () => {
-    if (!selectedEdgeId) return;
-    const edge = graph.edges.find(e => e.id === selectedEdgeId);
-    if (!edge) return;
-    const action: InterventionAction = {
-      action: 'WIDEN',
-      edge_id: edge.id,
-      new_lanes: edge.lanes + 1,
-      new_capacity_vph: edge.capacity_vph * 1.5,
-      rationale: `Widen ${edge.name || edge.id} (+1 Lane)`
-    };
-    setActiveInterventions([...activeInterventions, action]);
+  const widen = () => selectedEdge && applyActions([...interventions, { action: 'WIDEN', edge_id: selectedEdge.id, new_lanes: selectedEdge.lanes + 1, new_capacity_vph: selectedEdge.capacity_vph * 1.5 }]);
+  const isSelectedClosed = selectedEdge ? interventions.filter((action) => action.edge_id === selectedEdge.id).slice(-1)[0]?.action === 'CLOSE' : false;
+  const close = () => selectedEdge && applyActions(isSelectedClosed ? [...interventions, { action: 'OPEN', edge_id: selectedEdge.id }] : [...interventions, { action: 'CLOSE', edge_id: selectedEdge.id }]);
+  const reset = () => { setInterventions([]); setReport(null); if (graph) runLiveSimulation(graph.graph_id); };
+  const fitNetwork = () => {
+    if (!graph || !mapInstance.current) return;
+    const bounds = L.latLngBounds(graph.nodes.map((node) => [node.lat, node.lng] as L.LatLngExpression));
+    mapInstance.current.fitBounds(bounds.pad(0.08), { maxZoom: 15 });
   };
 
-  const handleCloseSelectedRoad = () => {
-    if (!selectedEdgeId) return;
-    const edge = graph.edges.find(e => e.id === selectedEdgeId);
-    if (!edge) return;
-    const action: InterventionAction = {
-      action: 'CLOSE',
-      edge_id: edge.id,
-      rationale: `Close/Remove ${edge.name || edge.id}`
-    };
-    setActiveInterventions([...activeInterventions, action]);
-  };
-
-  const handleResetInterventions = () => {
-    setActiveInterventions([]);
-    setInterventionReport(null);
-    runSimulation(selectedScenario, demandMultiplier, engineConfig).then(setSimulationResult);
-  };
-
-  const selectedEdge = graph.edges.find(e => e.id === selectedEdgeId);
-  const selectedMetric = selectedEdgeId && simulationResult ? simulationResult.edge_metrics[selectedEdgeId] : null;
-
-  // Node Cartesian 2D Coordinate Layout Mapping
-  const posMap: Record<string, [number, number]> = {
-    // 4-Node Braess Network
-    'A': [140, 240], 'B': [380, 110], 'C': [380, 370], 'D': [640, 240],
-    
-    // 8-Node Expanded Multi-Hub Network
-    'O1': [120, 120], 'O2': [120, 360],
-    'H1': [280, 120], 'H2': [280, 280],
-    'H3': [460, 160], 'H4': [460, 340],
-    'D1': [660, 160], 'D2': [660, 340],
-
-    // 3x3 Grid Network
-    'N_0_0': [200, 100], 'N_0_1': [400, 100], 'N_0_2': [600, 100],
-    'N_1_0': [200, 240], 'N_1_1': [400, 240], 'N_1_2': [600, 240],
-    'N_2_0': [200, 380], 'N_2_1': [400, 380], 'N_2_2': [600, 380],
-
-    // 6-Node Bottleneck Bridge Network
-    'W1': [100, 180], 'W2': [220, 240], 'W3': [330, 240],
-    'E1': [470, 240], 'E2': [580, 240], 'E3': [700, 300]
-  };
-
-  return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-      {/* Top Navigation Bar */}
-      <header className="app-header">
-        <div className="brand-container">
-          <Activity size={24} color="#06b6d4" />
-          <h1 className="brand-title">UrbanFlow</h1>
-          <span className="brand-badge">PBL OPTIMIZER</span>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <select
-            className="select-input"
-            style={{ width: 280 }}
-            value={selectedScenario}
-            onChange={(e) => setSelectedScenario(e.target.value)}
-          >
-            <option value="braess_4node">1. Classic Braess Paradox (4 Nodes)</option>
-            <option value="expanded_8node">2. Expanded City Network (8 Nodes, Latent Braess)</option>
-            <option value="grid_3x3">3. 3x3 Urban Grid Network (9 Nodes)</option>
-            <option value="bottleneck_bridge">4. Bottleneck Bridge Hub (6 Nodes)</option>
-          </select>
-
-          <button
-            className="btn btn-secondary"
-            onClick={() => setShowConfigDrawer(!showConfigDrawer)}
-            title="Tweak BPR & MSA Simulation Algorithms"
-          >
-            <Settings2 size={16} />
-            Config
-          </button>
-
-          <button
-            className="btn btn-secondary"
-            style={{ borderColor: 'var(--accent-cyan)', color: 'var(--accent-cyan)' }}
-            onClick={handleRunOptimizer}
-            disabled={isOptimizing}
-          >
-            <Zap size={16} />
-            {isOptimizing ? 'Analyzing Network...' : 'Run Optimizer'}
-          </button>
-
-          <button
-            className="btn btn-primary"
-            onClick={handleRunSimulation}
-            disabled={isLoading}
-          >
-            <Play size={16} />
-            {isLoading ? 'Simulating...' : 'Run Simulation'}
-          </button>
-        </div>
-      </header>
-
-      {/* Main 3-Pane Layout */}
-      <div className="app-layout">
-        {/* Left Pane: Intervention Studio & Optimizer Recommendations */}
-        <aside className="pane glass-panel">
-          <div>
-            <h2 style={{ fontSize: '0.95rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-              <Zap size={18} color="#06b6d4" />
-              Network Optimizer & Studio
-            </h2>
-            <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-              Automatically scans for Braess Paradox links to remove and bottlenecks to widen.
-            </p>
-          </div>
-
-          {/* Scenario Specific Shortcut Quick Action */}
-          {selectedScenario === 'braess_4node' && (
-            <div className="stat-card" style={{ borderLeft: '3px solid var(--accent-cyan)' }}>
-              <h3 style={{ fontSize: '0.85rem', marginBottom: 4 }}>⚡ Braess Paradox Experiment</h3>
-              <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: 10 }}>
-                Toggle the shortcut road (B ➔ C) to observe travel time jumping from 65 min to 80 min.
-              </p>
-              <button
-                className={`btn ${activeInterventions.some(m => m.action === 'ADD') ? 'btn-danger' : 'btn-primary'}`}
-                style={{ width: '100%', fontSize: '0.8rem' }}
-                onClick={toggleBraessShortcut}
-              >
-                {activeInterventions.some(m => m.action === 'ADD') ? 'Remove Shortcut (B➔C)' : 'Add Shortcut Road (B➔C)'}
-              </button>
-            </div>
-          )}
-
-          {/* Optimizer Recommendations List */}
-          {optimizationResult && (
-            <div className="stat-card glass-panel-glow" style={{ background: 'rgba(6, 182, 212, 0.06)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <h3 style={{ fontSize: '0.85rem', color: 'var(--accent-cyan)', fontWeight: 600 }}>
-                  ⚡ Optimizer Output ({optimizationResult.recommendations.length} Suggestions)
-                </h3>
-                <span style={{ fontSize: '0.7rem', color: 'var(--status-green)', fontWeight: 600 }}>
-                  -{optimizationResult.projected_overall_improvement_pct}% Delay
-                </span>
-              </div>
-              <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: 10 }}>
-                {optimizationResult.summary}
-              </p>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {optimizationResult.recommendations.map((rec) => (
-                  <div
-                    key={rec.rank}
-                    style={{
-                      padding: '10px',
-                      background: 'rgba(15, 23, 42, 0.8)',
-                      borderRadius: '8px',
-                      border: `1px solid ${rec.is_braess_fix ? 'rgba(239, 68, 68, 0.4)' : 'rgba(16, 185, 129, 0.4)'}`
-                    }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                      <span
-                        style={{
-                          fontSize: '0.7rem',
-                          padding: '2px 6px',
-                          borderRadius: '4px',
-                          fontWeight: 700,
-                          background: rec.type === 'REMOVE_ROAD' ? 'rgba(239, 68, 68, 0.2)' : 'rgba(16, 185, 129, 0.2)',
-                          color: rec.type === 'REMOVE_ROAD' ? 'var(--status-red)' : 'var(--status-green)'
-                        }}
-                      >
-                        {rec.type === 'REMOVE_ROAD' ? '🚫 REMOVE BRAESS LINK' : '➕ WIDEN BOTTLENECK'}
-                      </span>
-                      <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--status-green)' }}>
-                        -{rec.travel_time_reduction_pct}% Time
-                      </span>
-                    </div>
-
-                    <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#f8fafc', marginBottom: 4 }}>
-                      {rec.edge_name}
-                    </div>
-
-                    <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', lineHeight: 1.3, marginBottom: 8 }}>
-                      {rec.explanation}
-                    </p>
-
-                    <button
-                      className="btn btn-secondary"
-                      style={{ width: '100%', fontSize: '0.75rem', padding: '5px 10px', borderColor: 'var(--accent-cyan)' }}
-                      onClick={() => handleApplyOptimizerRecommendation(rec.action)}
-                    >
-                      <CheckCircle2 size={14} color="#06b6d4" />
-                      Apply This Optimization
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Selected Road Segment Inspector & Actions */}
-          <div className="stat-card">
-            <h3 style={{ fontSize: '0.85rem', marginBottom: 8 }}>Selected Road Segment</h3>
-            {selectedEdge ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: '0.78rem' }}>
-                <div><strong>Segment:</strong> {selectedEdge.name || selectedEdge.id}</div>
-                <div><strong>From ➔ To:</strong> {selectedEdge.source} ➔ {selectedEdge.target}</div>
-                <div><strong>Lanes:</strong> {selectedEdge.lanes} | <strong>Capacity:</strong> {selectedEdge.capacity_vph} vph</div>
-                {selectedMetric && (
-                  <>
-                    <div><strong>Flow Volume:</strong> {selectedMetric.volume_vph} vph</div>
-                    <div><strong>V/C Ratio:</strong> {selectedMetric.vc_ratio} (Speed: {selectedMetric.avg_speed_kmh} km/h)</div>
-                  </>
-                )}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 6 }}>
-                  <button className="btn btn-secondary" style={{ fontSize: '0.75rem' }} onClick={handleWidenSelectedRoad}>
-                    ➕ Widen (+1 Lane)
-                  </button>
-                  <button className="btn btn-danger" style={{ fontSize: '0.75rem' }} onClick={handleCloseSelectedRoad}>
-                    🚫 Close Road
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                Click any road on the map to inspect or manually modify it.
-              </p>
-            )}
-          </div>
-
-          {/* Active Staged Interventions */}
-          <div className="stat-card">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-              <h3 style={{ fontSize: '0.85rem' }}>Active Staged Changes ({activeInterventions.length})</h3>
-              {activeInterventions.length > 0 && (
-                <button
-                  onClick={handleResetInterventions}
-                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: 4 }}
-                >
-                  <RotateCcw size={12} /> Reset
-                </button>
-              )}
-            </div>
-            {activeInterventions.length === 0 ? (
-              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>No modifications staged.</p>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {activeInterventions.map((mod, i) => (
-                  <div key={i} style={{ fontSize: '0.75rem', padding: '6px 8px', background: 'rgba(255,255,255,0.04)', borderRadius: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span>{mod.action}: {mod.new_edge?.name || mod.edge_id}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </aside>
-
-        {/* Center: Graph & Simulation Canvas */}
-        <main className="center-canvas-pane">
-          {/* Braess Paradox Alert Banner */}
-          {interventionReport?.delta.is_braess_paradox && (
-            <div className="pulsing-alert" style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid var(--status-red)', borderRadius: 8, padding: '10px 14px', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
-              <AlertTriangle color="#ef4444" size={22} />
-              <div style={{ fontSize: '0.85rem', color: '#fca5a5' }}>
-                <strong>Braess Paradox Phenomenon Confirmed!</strong> {interventionReport.delta.summary_text}
-              </div>
-            </div>
-          )}
-
-          {/* Canvas SVG Container */}
-          <div className="graph-canvas-container">
-            <svg style={{ width: '100%', height: '100%' }} viewBox="0 0 800 480">
-              <defs>
-                <marker id="arrow" viewBox="0 0 10 10" refX="22" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b" />
-                </marker>
-                <marker id="arrow-congested" viewBox="0 0 10 10" refX="22" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#ef4444" />
-                </marker>
-                <marker id="arrow-selected" viewBox="0 0 10 10" refX="22" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#06b6d4" />
-                </marker>
-              </defs>
-
-              {/* 1. Base Road Edges & Flow Stream Lines */}
-              {graph.edges.map((edge) => {
-                const isSelected = edge.id === selectedEdgeId;
-                const isClosed = activeInterventions.some(m => m.action === 'CLOSE' && m.edge_id === edge.id);
-                const isWidened = activeInterventions.some(m => m.action === 'WIDEN' && m.edge_id === edge.id);
-                const metric = simulationResult?.edge_metrics[edge.id];
-                const vc = metric?.vc_ratio || 0;
-                const vol = metric?.volume_vph || 0;
-
-                let strokeColor = '#10b981';
-                if (isClosed) strokeColor = '#475569';
-                else if (isWidened) strokeColor = '#06b6d4';
-                else if (vc >= 1.0) strokeColor = '#ef4444';
-                else if (vc >= 0.85) strokeColor = '#f59e0b';
-
-                const [x1, y1] = posMap[edge.source] || [200, 240];
-                const [x2, y2] = posMap[edge.target] || [600, 240];
-                const pathId = `edge_path_${edge.id}`;
-
-                return (
-                  <g key={edge.id} onClick={() => setSelectedEdgeId(edge.id)} style={{ cursor: 'pointer' }}>
-                    {/* Hidden motion path for vehicle particle animation */}
-                    <path
-                      id={pathId}
-                      d={`M ${x1} ${y1} L ${x2} ${y2}`}
-                      fill="none"
-                      stroke="none"
-                    />
-
-                    {/* Base Road Asphalt Line */}
-                    <line
-                      x1={x1} y1={y1} x2={x2} y2={y2}
-                      stroke={isSelected ? '#06b6d4' : strokeColor}
-                      strokeWidth={isSelected ? 6 : Math.max(3.5, edge.lanes * 2.2)}
-                      strokeDasharray={isClosed ? '6,6' : 'none'}
-                      strokeOpacity={isClosed ? 0.35 : 0.85}
-                      markerEnd={isSelected ? 'url(#arrow-selected)' : (vc >= 1.0 ? 'url(#arrow-congested)' : 'url(#arrow)')}
-                    />
-
-                    {/* Animated Flow Stream Overlay (when traffic is active and road not closed) */}
-                    {!isClosed && vol > 10 && showParticles && (
-                      <line
-                        x1={x1} y1={y1} x2={x2} y2={y2}
-                        stroke={vc >= 1.0 ? '#fca5a5' : '#ffffff'}
-                        strokeWidth={Math.max(1.5, edge.lanes * 1.0)}
-                        strokeOpacity={0.65}
-                        className={vc >= 0.95 ? 'animated-flow-slow' : 'animated-flow-fast'}
-                      />
-                    )}
-
-                    {/* Road Name & Volume Label */}
-                    <text
-                      x={(x1 + x2) / 2}
-                      y={(y1 + y2) / 2 - 9}
-                      fill={isClosed ? '#64748b' : '#cbd5e1'}
-                      fontSize="10.5"
-                      fontFamily="JetBrains Mono"
-                      textAnchor="middle"
-                    >
-                      {isClosed ? '🚫 CLOSED' : `${edge.name ? edge.name.split(' ')[0] : edge.id} (${metric ? `${metric.volume_vph}vph` : ''})`}
-                    </text>
-                  </g>
-                );
-              })}
-
-              {/* 2. Render Active Added Road */}
-              {activeInterventions.filter(m => m.action === 'ADD' && m.new_edge).map(mod => {
-                const e = mod.new_edge!;
-                const [x1, y1] = posMap[e.source] || [380, 110];
-                const [x2, y2] = posMap[e.target] || [380, 370];
-                const pathId = `edge_path_${e.id}`;
-                return (
-                  <g key={e.id}>
-                    <path id={pathId} d={`M ${x1} ${y1} L ${x2} ${y2}`} fill="none" stroke="none" />
-                    <line
-                      x1={x1} y1={y1} x2={x2} y2={y2}
-                      stroke="#06b6d4"
-                      strokeWidth={5}
-                      strokeDasharray="6,4"
-                      markerEnd="url(#arrow-selected)"
-                    />
-                    <text x={(x1 + x2) / 2 + 10} y={(y1 + y2) / 2} fill="#38bdf8" fontSize="10" fontFamily="JetBrains Mono">
-                      ➕ Shortcut Active
-                    </text>
-                  </g>
-                );
-              })}
-
-              {/* 3. Dynamic Animated Vehicle Particles */}
-              {showParticles && graph.edges.map((edge) => {
-                const isClosed = activeInterventions.some(m => m.action === 'CLOSE' && m.edge_id === edge.id);
-                const metric = simulationResult?.edge_metrics[edge.id];
-                const vol = metric?.volume_vph || 0;
-                const speed = metric?.avg_speed_kmh || 50;
-                const vc = metric?.vc_ratio || 0;
-
-                if (isClosed || vol < 50) return null;
-
-                // Duration inversely proportional to vehicle speed (Slower cars in bottleneck)
-                const baseDurationSec = Math.max(1.0, Math.min(5.5, 90.0 / Math.max(10, speed))) / particleSpeed;
-                const particleCount = vol > 2500 ? 4 : (vol > 1200 ? 3 : 2);
-                const particleColor = vc >= 1.0 ? '#ef4444' : (vc >= 0.85 ? '#f59e0b' : '#38bdf8');
-                const pathId = `#edge_path_${edge.id}`;
-
-                return (
-                  <g key={`particles_${edge.id}`}>
-                    {Array.from({ length: particleCount }).map((_, pIdx) => {
-                      const delay = (baseDurationSec / particleCount) * pIdx;
-                      return (
-                        <circle key={pIdx} r={vc >= 1.0 ? 3.5 : 3.0} fill={particleColor} opacity={0.95}>
-                          <animateMotion
-                            dur={`${baseDurationSec.toFixed(2)}s`}
-                            begin={`${delay.toFixed(2)}s`}
-                            repeatCount="indefinite"
-                            rotate="auto"
-                          >
-                            <mpath href={pathId} />
-                          </animateMotion>
-                        </circle>
-                      );
-                    })}
-                  </g>
-                );
-              })}
-
-              {/* 4. Active Added Road Particles */}
-              {showParticles && activeInterventions.filter(m => m.action === 'ADD' && m.new_edge).map(mod => {
-                const e = mod.new_edge!;
-                const pathId = `#edge_path_${e.id}`;
-                return (
-                  <g key={`particles_${e.id}`}>
-                    {[0, 0.4, 0.8].map((delay, pIdx) => (
-                      <circle key={pIdx} r={3.2} fill="#38bdf8">
-                        <animateMotion dur={`${(1.2 / particleSpeed).toFixed(2)}s`} begin={`${delay}s`} repeatCount="indefinite">
-                          <mpath href={pathId} />
-                        </animateMotion>
-                      </circle>
-                    ))}
-                  </g>
-                );
-              })}
-
-              {/* 5. Nodes, Ripples, and Congestion Halos */}
-              {graph.nodes.map((node) => {
-                const [x, y] = posMap[node.id] || [400, 240];
-                const isOrigin = node.type === 'origin' || node.id.startsWith('O') || node.id === 'A';
-                const isDest = node.type === 'destination' || node.id.startsWith('D') || node.id === 'D';
-
-                // Check if any outgoing edge from this node is severely congested
-                const hasSevereOutgoing = graph.edges.some(e => e.source === node.id && (simulationResult?.edge_metrics[e.id]?.vc_ratio || 0) >= 1.0);
-
-                return (
-                  <g key={node.id}>
-                    {/* Ripple on origins */}
-                    {isOrigin && showParticles && (
-                      <circle cx={x} cy={y} fill="none" stroke="#38bdf8" strokeWidth="2" className="node-ripple-circle" />
-                    )}
-
-                    {/* Congestion warning halo */}
-                    {hasSevereOutgoing && (
-                      <circle cx={x} cy={y} r="26" fill="rgba(239, 68, 68, 0.25)" className="congestion-halo" />
-                    )}
-
-                    <circle
-                      cx={x} cy={y} r={16}
-                      fill={isOrigin ? '#1e3a8a' : (isDest ? '#065f46' : '#1e293b')}
-                      stroke={isOrigin ? '#60a5fa' : (isDest ? '#34d399' : '#94a3b8')}
-                      strokeWidth={2.5}
-                    />
-                    <text x={x} y={y + 4} fill="#f8fafc" fontSize="11" fontWeight="700" textAnchor="middle">
-                      {node.id}
-                    </text>
-                  </g>
-                );
-              })}
-            </svg>
-
-            {/* Bottom HUD: Demand Slider & Traffic Animation Controls */}
-            <div style={{ position: 'absolute', bottom: 12, left: 16, right: 16, background: 'rgba(15, 23, 42, 0.90)', backdropFilter: 'blur(12px)', padding: '10px 18px', borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, border: '1px solid var(--border-color)' }}>
-              {/* Traffic Volume Slider */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1 }}>
-                <Sliders size={16} color="#94a3b8" />
-                <span style={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
-                  Demand Volume: <strong>{(demandMultiplier * 100).toFixed(0)}%</strong>
-                </span>
-                <input
-                  type="range"
-                  min="0.5"
-                  max="2.0"
-                  step="0.1"
-                  value={demandMultiplier}
-                  onChange={(e) => setDemandMultiplier(parseFloat(e.target.value))}
-                  style={{ flex: 1, accentColor: 'var(--accent-cyan)' }}
-                />
-              </div>
-
-              {/* Animation Particle & Speed Controls */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, borderLeft: '1px solid var(--border-color)', paddingLeft: 14 }}>
-                <button
-                  className="btn btn-secondary"
-                  style={{
-                    fontSize: '0.75rem',
-                    padding: '4px 10px',
-                    background: showParticles ? 'rgba(6, 182, 212, 0.15)' : 'transparent',
-                    borderColor: showParticles ? 'var(--accent-cyan)' : 'var(--border-color)',
-                    color: showParticles ? 'var(--accent-cyan)' : 'var(--text-muted)'
-                  }}
-                  onClick={() => setShowParticles(!showParticles)}
-                >
-                  🚗 Traffic Particles: {showParticles ? 'ON' : 'OFF'}
-                </button>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                  <span>Speed:</span>
-                  {[0.8, 1.2, 2.0].map((spd) => (
-                    <button
-                      key={spd}
-                      style={{
-                        background: particleSpeed === spd ? 'var(--accent-cyan)' : 'rgba(255,255,255,0.06)',
-                        color: particleSpeed === spd ? '#000' : '#fff',
-                        border: 'none',
-                        borderRadius: 4,
-                        padding: '2px 6px',
-                        cursor: 'pointer',
-                        fontSize: '0.7rem',
-                        fontWeight: 600
-                      }}
-                      onClick={() => setParticleSpeed(spd)}
-                    >
-                      {spd === 0.8 ? '0.5x' : (spd === 1.2 ? '1x' : '2x')}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-        </main>
-
-        {/* Right Pane: Comparative Metrics & Equilibrium Path Flow Breakdown */}
-        <aside className="pane glass-panel">
-          <div>
-            <h2 style={{ fontSize: '0.95rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-              <Activity size={18} color="#06b6d4" />
-              Simulation Metrics & Paths
-            </h2>
-          </div>
-
-          {simulationResult && (
-            <>
-              {/* Average Travel Time Card */}
-              <div className="stat-card">
-                <div className="stat-label">Average Vehicle Travel Time</div>
-                <div className="stat-value">
-                  {simulationResult.summary_metrics.avg_travel_time_mins}{' '}
-                  <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>mins</span>
-                </div>
-                {interventionReport && (
-                  <div className={`stat-delta ${interventionReport.delta.avg_travel_time_change_pct <= 0 ? 'delta-good' : 'delta-bad'}`}>
-                    {interventionReport.delta.avg_travel_time_change_pct > 0 ? '+' : ''}
-                    {interventionReport.delta.avg_travel_time_change_pct}% vs baseline
-                  </div>
-                )}
-              </div>
-
-              {/* Total Network Vehicle Hours */}
-              <div className="stat-card">
-                <div className="stat-label">Total Congestion Hours</div>
-                <div className="stat-value">
-                  {simulationResult.summary_metrics.total_travel_time_hours}{' '}
-                  <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>hrs</span>
-                </div>
-              </div>
-
-              {/* Average Network Speed */}
-              <div className="stat-card">
-                <div className="stat-label">Average Network Speed</div>
-                <div className="stat-value">
-                  {simulationResult.summary_metrics.avg_network_speed_kmh}{' '}
-                  <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>km/h</span>
-                </div>
-              </div>
-
-              {/* Equilibrium Path Flows Breakdown Card */}
-              <div className="stat-card">
-                <h3 style={{ fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-                  <GitFork size={15} color="#06b6d4" />
-                  Equilibrium Route Allocation
-                </h3>
-                {simulationResult.path_flows && simulationResult.path_flows.length > 0 ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    {simulationResult.path_flows.map((p, i) => (
-                      <div key={i} style={{ fontSize: '0.75rem', padding: '6px 8px', background: 'rgba(15, 23, 42, 0.8)', borderRadius: 6, border: '1px solid rgba(255,255,255,0.05)' }}>
-                        <div style={{ fontWeight: 600, color: '#f8fafc', marginBottom: 2 }}>
-                          {p.path_nodes.join(' ➔ ')}
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)' }}>
-                          <span>Flow: <strong>{p.assigned_volume_vph} vph</strong></span>
-                          <span>Latency: <strong>{p.travel_time_mins} min</strong></span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>No path allocation records available.</p>
-                )}
-              </div>
-            </>
-          )}
-        </aside>
-      </div>
-
-      {/* Algorithm Tuning Modal / Drawer */}
-      {showConfigDrawer && (
-        <div style={{ position: 'fixed', top: 64, right: 0, width: 360, bottom: 0, background: 'rgba(10, 13, 20, 0.95)', borderLeft: '1px solid var(--border-color)', backdropFilter: 'blur(20px)', padding: 20, zIndex: 100, overflowY: 'auto' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-            <h2 style={{ fontSize: '1rem', fontWeight: 600 }}>⚙️ Algorithm Parameters</h2>
-            <button className="btn btn-secondary" style={{ padding: '4px 8px' }} onClick={() => setShowConfigDrawer(false)}>✕</button>
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, fontSize: '0.8rem' }}>
-            <div>
-              <label style={{ display: 'block', marginBottom: 4 }}>BPR Sensitivity Alpha (α): {engineConfig.default_alpha}</label>
-              <input
-                type="range" min="0.05" max="1.0" step="0.05"
-                value={engineConfig.default_alpha}
-                onChange={(e) => setEngineConfig({ ...engineConfig, default_alpha: parseFloat(e.target.value) })}
-                style={{ width: '100%', accentColor: 'var(--accent-cyan)' }}
-              />
-            </div>
-
-            <div>
-              <label style={{ display: 'block', marginBottom: 4 }}>BPR Exponent Beta (β): {engineConfig.default_beta}</label>
-              <input
-                type="range" min="1.0" max="6.0" step="0.5"
-                value={engineConfig.default_beta}
-                onChange={(e) => setEngineConfig({ ...engineConfig, default_beta: parseFloat(e.target.value) })}
-                style={{ width: '100%', accentColor: 'var(--accent-cyan)' }}
-              />
-            </div>
-
-            <div>
-              <label style={{ display: 'block', marginBottom: 4 }}>MSA Max Iterations: {engineConfig.max_iterations}</label>
-              <input
-                type="range" min="10" max="100" step="5"
-                value={engineConfig.max_iterations}
-                onChange={(e) => setEngineConfig({ ...engineConfig, max_iterations: parseInt(e.target.value) })}
-                style={{ width: '100%', accentColor: 'var(--accent-cyan)' }}
-              />
-            </div>
-
-            <button
-              className="btn btn-primary"
-              style={{ width: '100%', marginTop: 10 }}
-              onClick={() => {
-                setShowConfigDrawer(false);
-                handleRunSimulation();
-              }}
-            >
-              Apply & Re-Simulate
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+  return <div className="app-shell">
+    <header className="app-header"><div className="brand-container"><Layers size={18} /><strong className="brand-title">URBANFLOW</strong><span className="brand-badge">LIVE NETWORK LAB</span></div><div className="header-actions"><select className="select-input mode-select" value={viewMode} onChange={(event) => setViewMode(event.target.value as 'live' | 'graph')}><option value="live">Live map mode</option><option value="graph">Synthetic graph mode</option></select>{viewMode === 'live' ? <select className="select-input scenario-select" value={livePlace} onChange={(event) => handleLivePlaceChange(event.target.value as 'kochi' | 'new_york' | 'custom')}><option value="kochi">Kochi</option><option value="new_york">New York</option><option value="custom">Custom square</option></select> : <select className="select-input scenario-select" value={scenario} onChange={(event) => setScenario(event.target.value)}>{scenarios.map(([id, label]) => <option key={id} value={id}>{label}</option>)}{importedScenario && <option value={importedScenario[0]}>{importedScenario[1]}</option>}</select>}<select className="select-input scope-select" value={analysisScope} onChange={(event) => setAnalysisScope(event.target.value as 'network' | 'area')}><option value="network">Whole network</option><option value="area" disabled={!areaId}>Selected area</option></select><button className="btn" onClick={handleOptimizer} disabled={optimizing || loading}><Zap size={14} />{optimizing ? `Analyzing ${optimizationProgress.total ? `${Math.round((optimizationProgress.current / optimizationProgress.total) * 100)}%` : ''}` : 'Run optimizer'}</button><button className="btn btn-primary" onClick={() => graph && runLiveSimulation(graph.graph_id)} disabled={loading || !graph}><Play size={14} />{loading ? `Simulating${progress ? ` ${progress.iteration}/${progress.max_iterations}` : ''}` : 'Simulate'}</button></div></header>
+    <div className="app-layout"><aside className="sidebar-pane">
+      <section className="panel"><div className="panel-header"><span><Sliders size={14} /> Simulation values</span><span className="muted">{config.algorithm.toUpperCase()}</span></div><div className="panel-body"><label>Demand pressure <strong>{demandMultiplier.toFixed(1)}×</strong></label><input type="range" min="0.5" max="2.5" step="0.1" value={demandMultiplier} onChange={(event) => setDemandMultiplier(Number(event.target.value))} /><small className="muted">Higher pressure increases OD vehicle demand and exposes equilibrium effects such as the Braess paradox.</small>{report && <div className="comparison-box"><div><span>Baseline average</span><b>{report.baseline.summary_metrics.avg_travel_time_mins} min</b></div><div><span>All paths result</span><b>{report.intervention.summary_metrics.avg_travel_time_mins} min</b></div><strong className={report.delta.avg_travel_time_change_pct <= 0 ? 'good' : 'bad'}>{report.delta.avg_travel_time_change_pct <= 0 ? '' : '+'}{report.delta.avg_travel_time_change_pct.toFixed(1)}% vs baseline</strong></div>}<details open={showAdvanced} onToggle={(event) => setShowAdvanced((event.currentTarget as HTMLDetailsElement).open)}><summary>Advanced settings</summary><div className="advanced-fields"><div className="field-grid"><label>BPR alpha<input className="text-input" type="number" step="0.05" value={config.default_alpha} onChange={(event) => setConfig({ ...config, default_alpha: Number(event.target.value) })} /></label><label>BPR beta<input className="text-input" type="number" step="0.5" value={config.default_beta} onChange={(event) => setConfig({ ...config, default_beta: Number(event.target.value) })} /></label></div><label>MSA iterations<input className="text-input" type="number" min="1" max="500" value={config.max_iterations} onChange={(event) => setConfig({ ...config, max_iterations: Number(event.target.value) })} /></label></div></details></div></section>
+      <section className="panel"><div className="panel-header"><span>Selected link</span>{selectedEdge && <code>{selectedEdge.id}</code>}</div><div className="panel-body">{selectedEdge ? <><strong>{selectedEdge.name || selectedEdge.id}</strong><div className="stat-row"><span>Vehicles / hour</span><b>{Math.round(selectedMetric?.volume_vph || progress?.edge_volumes[selectedEdge.id] || 0).toLocaleString()}</b></div><div className="stat-row"><span>Road capacity</span><b>{Math.round(selectedMetric?.capacity_vph || selectedEdge.capacity_vph).toLocaleString()} vph</b></div><div className="stat-row"><span>V/C ratio</span><b>{selectedMetric?.vc_ratio?.toFixed(2) || 'pending'}</b></div><div className="stat-row"><span>Travel time</span><b>{selectedMetric ? `${(selectedMetric.congested_time_sec / 60).toFixed(1)} min` : 'pending'}</b></div><div className="button-row"><button className="btn btn-success" onClick={widen} disabled={loading}><Plus size={13} /> Widen</button><button className="btn btn-danger" onClick={close} disabled={loading}><Ban size={13} /> {isSelectedClosed ? 'Open' : 'Close'}</button></div></> : <p className="muted">Select a road on the map to inspect the live backend metrics.</p>}</div></section>
+      <section className="panel"><div className="panel-header"><span>Network telemetry</span>{interventions.length > 0 && <button className="icon-btn" onClick={reset} title="Reset interventions"><RotateCcw size={14} /></button>}</div><div className="panel-body">{simulation ? <><div className="stat-row"><span>Vehicles in demand</span><b>{Math.round(simulation.summary_metrics.total_vehicles).toLocaleString()}</b></div><div className="stat-row"><span>Average trip</span><b>{simulation.summary_metrics.avg_travel_time_mins} min</b></div><div className="stat-row"><span>Network speed</span><b>{simulation.summary_metrics.avg_network_speed_kmh} km/h</b></div><div className="stat-row"><span>Congested links</span><b>{simulation.summary_metrics.severely_congested_edges_count}</b></div><div className="stat-row"><span>Assignment</span><b>{simulation.summary_metrics.converged ? 'Converged' : 'Max iterations'}</b></div></> : <p className="muted">Waiting for the backend assignment.</p>}{report && <div className="alert-box">{report.delta.summary_text}</div>}{error && <div className="alert-box error">{error}</div>}</div></section>
+      <section className="panel recommendations"><div className="panel-header"><span>Optimizer results</span>{(optimization || discoveredRecommendations.length > 0) && <code>{optimization?.recommendations.length || discoveredRecommendations.length} actions</code>}</div><div className="panel-body">{(optimization?.recommendations || discoveredRecommendations).length > 0 ? <><button className="btn btn-primary" onClick={applyAllRecommendations} disabled={loading || optimizing}>Apply all paths and resimulate</button>{(optimization?.recommendations || discoveredRecommendations).map((recommendation) => <div className="recommendation" key={recommendation.edge_id}><strong>{recommendation.type === 'REMOVE_ROAD' ? 'Close' : 'Widen'} {recommendation.edge_name}</strong><span>Save {recommendation.travel_time_reduction_pct}% average time</span><button className="btn" onClick={() => applyActions([...interventions, recommendation.action])} disabled={loading}>Apply and resimulate</button></div>)}</> : <p className="muted">Run the optimizer to evaluate closures and capacity changes with the backend engine.</p>}</div></section>
+    </aside><main className={`map-pane ${areaMode ? 'area-selecting' : ''}`}><div ref={mapRef} className="map-canvas" /><div className="map-toolbar"><div className="map-actions"><button className="btn" onClick={() => setAreaMode(!areaMode)} title="Toggle between map navigation and area drawing"><Route size={14} /> {areaMode ? 'Pan map' : 'Select area'}</button>{areaId && <button className="btn" onClick={clearAreaSelection} title="Clear selected analysis area">Clear area</button>}<button className="btn" onClick={() => setShowNames(!showNames)} title="Toggle road and node names">Names {showNames ? 'on' : 'off'}</button><button className="btn" onClick={() => setMonochrome(!monochrome)} title="Toggle monochrome network">Mono {monochrome ? 'on' : 'off'}</button><button className="btn" onClick={() => setShowFlow(!showFlow)} title="Toggle moving traffic markers">Flow {showFlow ? 'on' : 'off'}</button><button className="btn" onClick={() => setShowBasemap(!showBasemap)} title="Toggle OpenStreetMap basemap"><Map size={14} /> Map</button><button className="btn" onClick={fitNetwork} title="Fit network to view"><LocateFixed size={14} /></button></div><div className="map-info"><strong>Network view</strong><span>{graph ? `${graph.nodes.length} nodes` : 'Loading nodes'}</span><span>{graph ? `${graph.edges.length} links` : 'Loading links'}</span></div></div><div className="legend"><span><i className="legend-line free" /> Free</span><span><i className="legend-line moderate" /> Moderate</span><span><i className="legend-line severe" /> Bottleneck</span><span><i className="legend-line widened" /> Widened</span></div></main></div>
+  </div>;
 }

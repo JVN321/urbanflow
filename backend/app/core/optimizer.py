@@ -47,11 +47,16 @@ def optimize_traffic_network(
     recommendations: List[OptimizerRecommendation] = []
     candidates_count = 0
 
-    # 3. Test Road Removal on each non-bridge edge (Braess Paradox Detector)
-    for edge in base_graph.edges:
+    # 3. Test Road Removal on active, non-bridge edges carrying traffic (Braess Paradox Detector)
+    # Only test roads carrying flow (removing zero-flow streets has 0 impact)
+    active_edges = [
+        e for e in base_graph.edges
+        if baseline.edge_metrics.get(e.id) and baseline.edge_metrics[e.id].volume_vph >= 50.0
+    ]
+
+    for edge in active_edges:
         is_bridge = (edge.source, edge.target) in bridges or (edge.target, edge.source) in bridges
         if is_bridge:
-            # Cannot remove a bridge (it disconnects the network)
             continue
 
         candidates_count += 1

@@ -8,6 +8,8 @@ from app.api.routes_simulation import router as sim_router
 from app.api.routes_interventions import router as interv_router
 from app.api.routes_benchmarks import router as bench_router
 from app.api.routes_optimizer import router as opt_router
+from app.api.routes_analysis import router as analysis_router
+from app.api.routes_osm import router as osm_router
 
 app = FastAPI(
     title="UrbanFlow - Traffic Graph Optimization Engine",
@@ -30,6 +32,8 @@ app.include_router(sim_router)
 app.include_router(interv_router)
 app.include_router(bench_router)
 app.include_router(opt_router)
+app.include_router(analysis_router)
+app.include_router(osm_router)
 
 
 @app.get("/api/health", tags=["Health"])

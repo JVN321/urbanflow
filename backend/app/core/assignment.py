@@ -6,7 +6,7 @@ Includes path flow decomposition and convergence tracking.
 """
 import uuid
 import networkx as nx
-from typing import Dict, List, Tuple, Optional
+from typing import Any, Callable, Dict, List, Optional
 from app.core.graph_model import (
     UrbanFlowGraph,
     TrafficDemand,
@@ -54,7 +54,8 @@ def simulate_traffic_msa(
     graph: UrbanFlowGraph,
     demand: TrafficDemand,
     demand_multiplier: float = 1.0,
-    config: Optional[SimulationConfig] = None
+    config: Optional[SimulationConfig] = None,
+    progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None
 ) -> SimulationResult:
     """
     Executes User Equilibrium traffic assignment using the Method of Successive Averages (MSA).
@@ -141,8 +142,23 @@ def simulate_traffic_msa(
             max_flow_diff += abs(new_flow - old_flow)
             edge_flows[eid] = new_flow
 
+        if progress_callback:
+            progress_callback({
+                "iteration": k,
+                "max_iterations": config.max_iterations,
+                "converged": False,
+                "edge_volumes": {eid: round(volume, 1) for eid, volume in edge_flows.items()}
+            })
+
         if total_flow > 0 and (max_flow_diff / max(total_flow, 1.0)) < config.convergence_tolerance and k >= 4:
             converged = True
+            if progress_callback:
+                progress_callback({
+                    "iteration": k,
+                    "max_iterations": config.max_iterations,
+                    "converged": True,
+                    "edge_volumes": {eid: round(volume, 1) for eid, volume in edge_flows.items()}
+                })
             break
 
     # Build final metrics and results

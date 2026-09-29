@@ -10,7 +10,8 @@ from app.core.graph_model import (
     TrafficDemand,
     InterventionAction,
     InterventionReport,
-    MetricsDelta
+    MetricsDelta,
+    SimulationConfig
 )
 from app.core.assignment import simulate_traffic_msa
 
@@ -35,6 +36,12 @@ def apply_modifications(base_graph: UrbanFlowGraph, modifications: List[Interven
         elif mod.action == "CLOSE" and mod.edge_id in edge_map:
             # Remove edge from network
             del edge_map[mod.edge_id]
+
+        elif mod.action == "OPEN" and mod.edge_id:
+            # Re-opening restores the original edge after a preceding CLOSE.
+            original = next((edge for edge in base_graph.edges if edge.id == mod.edge_id), None)
+            if original:
+                edge_map[mod.edge_id] = original.model_copy()
         
         elif mod.action == "SPEED_LIMIT" and mod.edge_id in edge_map:
             edge = edge_map[mod.edge_id]
@@ -58,20 +65,21 @@ def evaluate_intervention(
     base_graph: UrbanFlowGraph,
     demand: TrafficDemand,
     modifications: List[InterventionAction],
-    demand_multiplier: float = 1.0
+    demand_multiplier: float = 1.0,
+    config: SimulationConfig | None = None
 ) -> InterventionReport:
     """
     Runs baseline simulation, applies modifications, runs intervention simulation,
     and computes differential impact metrics (including Braess Paradox detection).
     """
     # 1. Baseline Simulation
-    baseline_result = simulate_traffic_msa(base_graph, demand, demand_multiplier)
+    baseline_result = simulate_traffic_msa(base_graph, demand, demand_multiplier, config)
     
     # 2. Apply modifications
     modified_graph = apply_modifications(base_graph, modifications)
     
     # 3. Intervention Simulation
-    intervention_result = simulate_traffic_msa(modified_graph, demand, demand_multiplier)
+    intervention_result = simulate_traffic_msa(modified_graph, demand, demand_multiplier, config)
     
     # 4. Calculate Deltas
     base_time = baseline_result.summary_metrics.avg_travel_time_mins

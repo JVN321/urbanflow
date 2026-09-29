@@ -92,7 +92,7 @@ export interface SimulationResult {
 }
 
 export interface InterventionAction {
-  action: 'WIDEN' | 'CLOSE' | 'ADD' | 'SPEED_LIMIT';
+  action: 'WIDEN' | 'CLOSE' | 'OPEN' | 'ADD' | 'SPEED_LIMIT';
   edge_id?: string;
   new_lanes?: number;
   new_capacity_vph?: number;

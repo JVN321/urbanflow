@@ -1,0 +1,155 @@
+{
+  "graph_id": "kochi_central_osm",
+  "baseline_avg_travel_time_mins": 14.22,
+  "total_candidates_evaluated": 302,
+  "recommendations": [
+    {
+      "rank": 1,
+      "type": "REMOVE_ROAD",
+      "edge_id": "kochi_e_1048",
+      "edge_name": "Road 1048",
+      "action": {
+        "action": "CLOSE",
+        "edge_id": "kochi_e_1048",
+        "new_lanes": null,
+        "new_capacity_vph": null,
+        "new_speed_kmh": null,
+        "new_edge": null,
+        "rationale": "Evaluate closure of Road 1048"
+      },
+      "avg_travel_time_before_mins": 14.22,
+      "avg_travel_time_after_mins": 13.09,
+      "travel_time_reduction_pct": 7.95,
+      "throughput_gain_pct": 0.25,
+      "is_braess_fix": true,
+      "explanation": "Braess Paradox link identified: Closing this road eliminates an inefficient shortcut, rerouting traffic to higher-capacity arterials and reducing average travel time by 7.9%."
+    },
+    {
+      "rank": 2,
+      "type": "REMOVE_ROAD",
+      "edge_id": "kochi_e_523",
+      "edge_name": "Road 523",
+      "action": {
+        "action": "CLOSE",
+        "edge_id": "kochi_e_523",
+        "new_lanes": null,
+        "new_capacity_vph": null,
+        "new_speed_kmh": null,
+        "new_edge": null,
+        "rationale": "Evaluate closure of Road 523"
+      },
+      "avg_travel_time_before_mins": 14.22,
+      "avg_travel_time_after_mins": 13.97,
+      "travel_time_reduction_pct": 1.76,
+      "throughput_gain_pct": 0.0,
+      "is_braess_fix": true,
+      "explanation": "Braess Paradox link identified: Closing this road eliminates an inefficient shortcut, rerouting traffic to higher-capacity arterials and reducing average travel time by 1.8%."
+    },
+    {
+      "rank": 3,
+      "type": "WIDEN_ROAD",
+      "edge_id": "kochi_e_523",
+      "edge_name": "Road 523",
+      "action": {
+        "action": "WIDEN",
+        "edge_id": "kochi_e_523",
+        "new_lanes": 3,
+        "new_capacity_vph": 2250.0,
+        "new_speed_kmh": null,
+        "new_edge": null,
+        "rationale": "Widen bottleneck edge Road 523 (+1 lane)"
+      },
+      "avg_travel_time_before_mins": 14.22,
+      "avg_travel_time_after_mins": 13.99,
+      "travel_time_reduction_pct": 1.62,
+      "throughput_gain_pct": 0.25,
+      "is_braess_fix": false,
+      "explanation": "Critical bottleneck mitigation: Adding 1 lane increases road capacity to 2250 vph, decreasing congestion delay by 1.6%."
+    },
+    {
+      "rank": 4,
+      "type": "WIDEN_ROAD",
+      "edge_id": "kochi_e_1018",
+      "edge_name": "Mahatma Gandhi Road",
+      "action": {
+        "action": "WIDEN",
+        "edge_id": "kochi_e_1018",
+        "new_lanes": 3,
+        "new_capacity_vph": 2700.0,
+        "new_speed_kmh": null,
+        "new_edge": null,
+        "rationale": "Widen bottleneck edge Mahatma Gandhi Road (+1 lane)"
+      },
+      "avg_travel_time_before_mins": 14.22,
+      "avg_travel_time_after_mins": 14.02,
+      "travel_time_reduction_pct": 1.41,
+      "throughput_gain_pct": 0.0,
+      "is_braess_fix": false,
+      "explanation": "Critical bottleneck mitigation: Adding 1 lane increases road capacity to 2700 vph, decreasing congestion delay by 1.4%."
+    },
+    {
+      "rank": 5,
+      "type": "REMOVE_ROAD",
+      "edge_id": "kochi_e_55",
+      "edge_name": "Hospital Road",
+      "action": {
+        "action": "CLOSE",
+        "edge_id": "kochi_e_55",
+        "new_lanes": null,
+        "new_capacity_vph": null,
+        "new_speed_kmh": null,
+        "new_edge": null,
+        "rationale": "Evaluate closure of Hospital Road"
+      },
+      "avg_travel_time_before_mins": 14.22,
+      "avg_travel_time_after_mins": 14.14,
+      "travel_time_reduction_pct": 0.56,
+      "throughput_gain_pct": 0.25,
+      "is_braess_fix": true,
+      "explanation": "Braess Paradox link identified: Closing this road eliminates an inefficient shortcut, rerouting traffic to higher-capacity arterials and reducing average travel time by 0.6%."
+    },
+    {
+      "rank": 6,
+      "type": "REMOVE_ROAD",
+      "edge_id": "kochi_e_61",
+      "edge_name": "Hospital Road",
+      "action": {
+        "action": "CLOSE",
+        "edge_id": "kochi_e_61",
+        "new_lanes": null,
+        "new_capacity_vph": null,
+        "new_speed_kmh": null,
+        "new_edge": null,
+        "rationale": "Evaluate closure of Hospital Road"
+      },
+      "avg_travel_time_before_mins": 14.22,
+      "avg_travel_time_after_mins": 14.14,
+      "travel_time_reduction_pct": 0.56,
+      "throughput_gain_pct": 0.25,
+      "is_braess_fix": true,
+      "explanation": "Braess Paradox link identified: Closing this road eliminates an inefficient shortcut, rerouting traffic to higher-capacity arterials and reducing average travel time by 0.6%."
+    }
+  ],
+  "optimal_combined_actions": [
+    {
+      "action": "CLOSE",
+      "edge_id": "kochi_e_1048",
+      "new_lanes": null,
+      "new_capacity_vph": null,
+      "new_speed_kmh": null,
+      "new_edge": null,
+      "rationale": "Evaluate closure of Road 1048"
+    },
+    {
+      "action": "CLOSE",
+      "edge_id": "kochi_e_523",
+      "new_lanes": null,
+      "new_capacity_vph": null,
+      "new_speed_kmh": null,
+      "new_edge": null,
+      "rationale": "Evaluate closure of Road 523"
+    }
+  ],
+  "projected_overall_improvement_pct": 9.71,
+  "summary": "Evaluated 302 candidate modifications. Found 6 high-impact interventions. Top recommendation: REMOVE_ROAD on Road 1048 (reduces latency by 7.95%)."
+}

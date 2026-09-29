@@ -44,3 +44,17 @@ def test_network_optimizer_braess_detection():
     top_rec = opt_result.recommendations[0]
     assert top_rec.travel_time_reduction_pct > 0.0
     print(f"Top Recommendation: {top_rec.type} on {top_rec.edge_name} (Saves {top_rec.travel_time_reduction_pct}%)")
+
+
+def test_api_optimizer_recommendation():
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    client = TestClient(app)
+    response = client.post("/api/optimizer/recommend?graph_id=expanded_8node&demand_multiplier=1.0", json={})
+    assert response.status_code == 200
+    data = response.json()
+    assert "recommendations" in data
+    assert len(data["recommendations"]) > 0
+    assert data["recommendations"][0]["travel_time_reduction_pct"] > 0
+

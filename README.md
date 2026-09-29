@@ -77,6 +77,22 @@ uvicorn app.main:app --reload --port 8000
 ```
 Interactive Swagger API docs will be live at: `http://localhost:8000/docs`
 
+### Importing a New Place from OpenStreetMap
+
+The backend can fetch a new drivable place directly from OpenStreetMap through
+OSMnx, register it in memory, generate an initial OD demand set, and run the
+simulation before returning the data:
+
+```bash
+curl -X POST http://localhost:8000/api/osm/import \
+    -H 'Content-Type: application/json' \
+    -d '{"place":"Bengaluru, India","network_type":"drive","demand_multiplier":1.0}'
+```
+
+The response contains `graph`, `demand`, and `result`. The returned `graph.graph_id`
+can then be used with `/api/simulate`, `/api/optimizer/recommend`,
+`/api/optimizer/stream-optimize`, and `/api/interventions/evaluate`.
+
 ---
 
 ### 3. Running the Frontend (Person A)

@@ -8,7 +8,7 @@ import {
   SimulationConfig
 } from '../types';
 
-const API_BASE_URL = 'http://localhost:8000/api';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
 
 export const MOCK_BRAESS_BASELINE_GRAPH: UrbanFlowGraph = {
   graph_id: 'braess_4node',
@@ -56,14 +56,19 @@ export const MOCK_EXPANDED_8NODE_GRAPH: UrbanFlowGraph = {
 };
 
 export const fetchGraph = async (graphId: string): Promise<UrbanFlowGraph> => {
-  try {
-    const res = await fetch(`${API_BASE_URL}/graphs/${graphId}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.json();
-  } catch (err) {
-    if (graphId === 'expanded_8node') return MOCK_EXPANDED_8NODE_GRAPH;
-    return MOCK_BRAESS_BASELINE_GRAPH;
+  const res = await fetch(`${API_BASE_URL}/graphs/${graphId}`);
+  if (!res.ok) throw new Error(`Unable to load graph ${graphId} (HTTP ${res.status})`);
+  return await res.json();
+};
+
+export const importOSMPlace = async (payload: { place: string; network_type?: string; demand_multiplier: number; config: SimulationConfig }): Promise<{ graph: UrbanFlowGraph; result: SimulationResult }> => {
+  const response = await fetch(`${API_BASE_URL}/osm/import`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  if (!response.ok) {
+    let detail = '';
+    try { detail = (await response.json()).detail || ''; } catch { /* response may not be JSON */ }
+    throw new Error(`OSM import failed (HTTP ${response.status})${detail ? `: ${detail}` : ''}`);
   }
+  return response.json();
 };
 
 export const runSimulation = async (
@@ -71,56 +76,61 @@ export const runSimulation = async (
   demandMultiplier: number = 1.0,
   config?: SimulationConfig
 ): Promise<SimulationResult> => {
-  try {
-    const res = await fetch(`${API_BASE_URL}/simulate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ graph_id: graphId, demand_multiplier: demandMultiplier, ...(config ? { iterations: config.max_iterations } : {}) })
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.json();
-  } catch (err) {
-    // Return realistic mock based on scenario
-    const isExpanded = graphId === 'expanded_8node';
-    return {
-      run_id: 'mock_run',
-      graph_id: graphId,
-      summary_metrics: {
-        total_vehicles: isExpanded ? 6600 : 4000,
-        total_travel_time_hours: isExpanded ? 2450.0 : 4333.3,
-        avg_travel_time_mins: isExpanded ? 22.4 : 65.0,
-        avg_network_speed_kmh: isExpanded ? 34.2 : 32.5,
-        severely_congested_edges_count: isExpanded ? 3 : 0,
-        network_efficiency_index: isExpanded ? 0.72 : 1.0,
-        iterations_run: 25,
-        converged: true
-      },
-      edge_metrics: {},
-      bottlenecks: isExpanded ? [
-        { edge_id: 'e_H4_D1', edge_name: 'CBD South Avenue', vc_ratio: 1.28, volume_vph: 1410, capacity_vph: 1100, severity_score: 0.95, cause: 'Overloaded by Midtown Shortcut flow', recommendation: 'Remove Midtown-South Crosscut shortcut' },
-        { edge_id: 'e_H3_H4_SHORTCUT', edge_name: 'Midtown-South Crosscut', vc_ratio: 0.94, volume_vph: 3300, capacity_vph: 3500, severity_score: 0.75, cause: 'Adverse shortcut funneling traffic', recommendation: 'Prune edge to eliminate Braess bottleneck' }
-      ] : [],
-      path_flows: isExpanded ? [
-        { path_nodes: ['O1', 'H1', 'H3', 'H4', 'D1'], path_edges: ['e_O1_H1', 'e_H1_H3', 'e_H3_H4_SHORTCUT', 'e_H4_D1'], assigned_volume_vph: 1350, travel_time_mins: 24.5 },
-        { path_nodes: ['O1', 'H1', 'H3', 'D1'], path_edges: ['e_O1_H1', 'e_H1_H3', 'e_H3_D1'], assigned_volume_vph: 850, travel_time_mins: 21.0 }
-      ] : [
-        { path_nodes: ['A', 'B', 'D'], path_edges: ['e_AB', 'e_BD'], assigned_volume_vph: 2000, travel_time_mins: 65.0 },
-        { path_nodes: ['A', 'C', 'D'], path_edges: ['e_AC', 'e_CD'], assigned_volume_vph: 2000, travel_time_mins: 65.0 }
-      ]
-    };
-  }
+  const res = await fetch(`${API_BASE_URL}/simulate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ graph_id: graphId, demand_multiplier: demandMultiplier, config })
+  });
+  if (!res.ok) throw new Error(`Simulation failed (HTTP ${res.status})`);
+  return await res.json();
+};
+
+export interface SimulationProgressEvent {
+  iteration: number;
+  max_iterations: number;
+  converged: boolean;
+  edge_volumes: Record<string, number>;
+}
+
+export const startSimulationStream = (
+  graphId: string,
+  demandMultiplier: number,
+  config: SimulationConfig,
+  onProgress: (event: SimulationProgressEvent) => void,
+  onComplete: (result: SimulationResult) => void,
+  onError: (error: Error) => void
+) => {
+  const source = new EventSource(`${API_BASE_URL}/simulate/stream?graph_id=${encodeURIComponent(graphId)}&demand_multiplier=${demandMultiplier}&iterations=${config.max_iterations}&alpha=${config.default_alpha}&beta=${config.default_beta}&convergence_tolerance=${config.convergence_tolerance}&algorithm=${config.algorithm}&cost_model=${config.cost_model}`);
+  source.onmessage = (event) => {
+    try {
+      const payload = JSON.parse(event.data);
+      if (payload.type === 'progress') onProgress(payload);
+      if (payload.type === 'complete') {
+        source.close();
+        onComplete(payload.result);
+      }
+    } catch {
+      onError(new Error('Invalid simulation stream response'));
+      source.close();
+    }
+  };
+  source.onerror = () => {
+    source.close();
+    onError(new Error('Simulation stream disconnected'));
+  };
+  return () => source.close();
 };
 
 export const evaluateIntervention = async (payload: InterventionPayload): Promise<InterventionReport> => {
-  try {
-    const res = await fetch(`${API_BASE_URL}/interventions/evaluate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.json();
-  } catch (err) {
+  const res = await fetch(`${API_BASE_URL}/interventions/evaluate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) throw new Error(`Intervention evaluation failed (HTTP ${res.status})`);
+  return await res.json();
+  /* istanbul ignore next */
+  if (false) {
     const hasAdded = payload.modifications.some((m: InterventionAction) => m.action === 'ADD');
     const hasClosedShortcut = payload.modifications.some((m: InterventionAction) => m.action === 'CLOSE' && (m.edge_id === 'e_H3_H4_SHORTCUT' || m.edge_id === 'e_BC'));
     
@@ -170,6 +180,65 @@ export const evaluateIntervention = async (payload: InterventionPayload): Promis
   }
 };
 
+export interface OptimizationProgressEvent {
+  current: number;
+  total: number;
+  candidate: string;
+  name: string;
+  action_type: string;
+  time_pct?: number;
+  status?: string;
+}
+
+export const startOptimizationStream = (
+  graphId: string,
+  demandMultiplier: number,
+  config: SimulationConfig,
+  onProgress: (event: OptimizationProgressEvent) => void,
+  onDiscovery: (recommendation: any) => void,
+  onComplete: (result: OptimizationResult) => void,
+  onError: (error: Error) => void
+) => {
+  const source = new EventSource(`${API_BASE_URL}/optimizer/stream-optimize?graph_id=${encodeURIComponent(graphId)}&demand_multiplier=${demandMultiplier}&max_iterations=${config.max_iterations}`);
+  source.onmessage = (event) => {
+    try {
+      const payload = JSON.parse(event.data);
+      if (payload.type === 'progress') onProgress(payload);
+      if (payload.type === 'discovery') onDiscovery(payload.recommendation);
+      if (payload.type === 'complete') { source.close(); onComplete(payload.result); }
+    } catch { source.close(); onError(new Error('Invalid optimizer stream response')); }
+  };
+  source.onerror = () => { source.close(); onError(new Error('Optimizer stream disconnected')); };
+  return () => source.close();
+};
+
+export interface AreaAnalysisResult {
+  area_id: string;
+  graph: UrbanFlowGraph;
+  result: SimulationResult;
+}
+
+export const analyzeArea = (payload: {
+  graph_id: string;
+  min_lat: number;
+  min_lng: number;
+  max_lat: number;
+  max_lng: number;
+  demand_multiplier: number;
+  config: SimulationConfig;
+  fetch_osm?: boolean;
+}): Promise<AreaAnalysisResult> => requestArea(payload);
+
+async function requestArea(payload: Parameters<typeof analyzeArea>[0]): Promise<AreaAnalysisResult> {
+  const response = await fetch(`${API_BASE_URL}/analysis/area`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  if (!response.ok) {
+    let detail = '';
+    try { detail = (await response.json()).detail || ''; } catch { /* response may not be JSON */ }
+    throw new Error(`Area analysis failed (HTTP ${response.status})${detail ? `: ${detail}` : ''}`);
+  }
+  return response.json();
+}
+
 export const fetchOptimizationRecommendations = async (
   graphId: string,
   demandMultiplier: number = 1.0,
@@ -184,6 +253,7 @@ export const fetchOptimizationRecommendations = async (
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json();
   } catch (err) {
+    throw err;
     if (graphId === 'expanded_8node') {
       return {
         graph_id: 'expanded_8node',
@@ -256,3 +326,91 @@ export const fetchOptimizationRecommendations = async (
 function round2(val: number): number {
   return Math.round(val * 100) / 100;
 }
+
+export interface OptimizationProgressEvent {
+  current: number;
+  total: number;
+  candidate: string;
+  name: string;
+  action_type: string;
+  time_pct?: number;
+  status?: string;
+}
+
+export const startLegacyOptimizationStream = (
+  graphId: string,
+  demandMultiplier: number = 1.0,
+  onProgress: (event: OptimizationProgressEvent) => void,
+  onDiscovery: (rec: any) => void,
+  onComplete: (result: OptimizationResult) => void,
+  onError?: (err: any) => void
+) => {
+  const url = `${API_BASE_URL}/optimizer/stream-optimize?graph_id=${graphId}&demand_multiplier=${demandMultiplier}`;
+  
+  try {
+    const eventSource = new EventSource(url);
+    
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'progress') {
+          onProgress(data);
+        } else if (data.type === 'discovery') {
+          onDiscovery(data.recommendation);
+        } else if (data.type === 'complete') {
+          eventSource.close();
+          onComplete(data.result);
+        }
+      } catch (e) {
+        console.error('Error parsing SSE event:', e);
+        if (onError) onError(e);
+      }
+    };
+
+    eventSource.onerror = (err) => {
+      console.warn('SSE stream disconnected, falling back to simulated progress runner.');
+      eventSource.close();
+      if (onError) onError(err);
+      runFallbackStream(graphId, demandMultiplier, onProgress, onDiscovery, onComplete);
+    };
+
+    return () => eventSource.close();
+  } catch (err) {
+    if (onError) onError(err);
+    runFallbackStream(graphId, demandMultiplier, onProgress, onDiscovery, onComplete);
+    return () => {};
+  }
+};
+
+const runFallbackStream = (
+  graphId: string,
+  demandMultiplier: number,
+  onProgress: (event: OptimizationProgressEvent) => void,
+  onDiscovery: (rec: any) => void,
+  onComplete: (result: OptimizationResult) => void
+) => {
+  fetchOptimizationRecommendations(graphId, demandMultiplier).then((result) => {
+    let current = 0;
+    const total = result.total_candidates_evaluated || 20;
+    const interval = setInterval(() => {
+      current += 1;
+      const rec = result.recommendations.find(r => r.rank === current);
+      if (rec) {
+        onDiscovery(rec);
+      }
+      onProgress({
+        current,
+        total,
+        candidate: `eval_edge_${current}`,
+        name: rec ? rec.edge_name : `Testing corridor #${current}`,
+        action_type: rec ? rec.type : 'EVALUATING',
+        time_pct: rec ? rec.travel_time_reduction_pct : 0.0
+      });
+
+      if (current >= total) {
+        clearInterval(interval);
+        onComplete(result);
+      }
+    }, 120);
+  });
+};

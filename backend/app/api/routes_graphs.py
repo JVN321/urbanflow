@@ -15,7 +15,7 @@ _GRAPHS: Dict[str, UrbanFlowGraph] = {}
 _DEMANDS: Dict[str, TrafficDemand] = {}
 
 # Initialize registry
-b_graph, b_demand = get_braess_paradox_network(include_shortcut=False)
+b_graph, b_demand = get_braess_paradox_network(include_shortcut=True)
 _GRAPHS["braess_4node"] = b_graph
 _DEMANDS["braess_4node"] = b_demand
 
@@ -46,8 +46,10 @@ if os.path.exists(kochi_graph_path):
         with open(kochi_graph_path, "r") as f:
             k_data = json.load(f)
             k_graph = UrbanFlowGraph(**k_data)
-            _GRAPHS["kochi_central"] = k_graph
-            _GRAPHS["kochi_arterial"] = k_graph
+            # Keep the public registry aliases stable. The dataset's internal
+            # graph_id must not leak into follow-up simulation requests.
+            _GRAPHS["kochi_central"] = k_graph.model_copy(update={"graph_id": "kochi_central"})
+            _GRAPHS["kochi_arterial"] = k_graph.model_copy(update={"graph_id": "kochi_arterial"})
         if os.path.exists(kochi_od_path):
             with open(kochi_od_path, "r") as f:
                 k_od_data = json.load(f)
