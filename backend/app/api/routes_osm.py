@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api/osm", tags=["OpenStreetMap"])
 class OSMImportRequest(BaseModel):
     place: str = Field(min_length=2, max_length=200)
     network_type: str = Field(default="drive", pattern="^(drive|walk|bike|all)$")
-    demand_multiplier: float = Field(default=1.0, ge=0.1, le=5.0)
+    demand_multiplier: float = Field(default=1.0, ge=0.1, le=20.0)
     config: SimulationConfig | None = None
 
 

@@ -269,3 +269,113 @@ def get_bottleneck_bridge_network() -> Tuple[UrbanFlowGraph, TrafficDemand]:
         ]
     )
     return graph, demand
+
+
+def get_new_york_manhattan_network() -> Tuple[UrbanFlowGraph, TrafficDemand]:
+    """
+    Generates a realistic Midtown Manhattan Grid network (Times Square, Grand Central, Herald Square, Central Park South).
+    Avenues (North/South): 8th Ave, 7th Ave, Broadway, 6th Ave, 5th Ave, Madison Ave, Park Ave.
+    Cross Streets (East/West): 34th St, 42nd St, 49th St, 57th St.
+    """
+    streets = [
+        ("34th", 40.7488),
+        ("42nd", 40.7549),
+        ("49th", 40.7598),
+        ("57th", 40.7658),
+    ]
+    avenues = [
+        ("8th_Ave", -73.9930, "southbound"),
+        ("7th_Ave", -73.9870, "southbound"),
+        ("6th_Ave", -73.9820, "northbound"),
+        ("5th_Ave", -73.9770, "southbound"),
+        ("Madison_Ave", -73.9730, "northbound"),
+        ("Park_Ave", -73.9700, "two-way"),
+    ]
+
+    nodes = []
+    node_map = {}
+    for st_name, lat in streets:
+        for av_name, lng, _ in avenues:
+            nid = f"{st_name}_{av_name}"
+            label = f"{st_name} St & {av_name.replace('_', ' ')}"
+            node_type = "origin" if st_name == "34th" else ("destination" if st_name == "57th" else "intersection")
+            node = GraphNode(id=nid, label=label, lat=lat, lng=lng, type=node_type)
+            nodes.append(node)
+            node_map[nid] = node
+
+    edges = []
+    edge_idx = 1
+    # Cross street links (alternating one-way)
+    for st_idx, (st_name, _) in enumerate(streets):
+        direction = "eastbound" if st_idx % 2 == 0 else "westbound"
+        for i in range(len(avenues) - 1):
+            av1, av2 = avenues[i][0], avenues[i + 1][0]
+            u_id = f"{st_name}_{av1}"
+            v_id = f"{st_name}_{av2}"
+            u_node, v_node = node_map[u_id], node_map[v_id]
+            if direction == "eastbound":
+                src, tgt, g = u_id, v_id, [[u_node.lng, u_node.lat], [v_node.lng, v_node.lat]]
+            else:
+                src, tgt, g = v_id, u_id, [[v_node.lng, v_node.lat], [u_node.lng, u_node.lat]]
+
+            edges.append(GraphEdge(
+                id=f"e_ny_{edge_idx}", source=src, target=tgt, name=f"{st_name} St ({direction})",
+                length_m=350.0, lanes=2, free_speed_kmh=40.0, capacity_vph=1400.0,
+                geometry=g, road_type="primary"
+            ))
+            edge_idx += 1
+
+    # Avenue links
+    for av_name, _, av_dir in avenues:
+        for i in range(len(streets) - 1):
+            st1, st2 = streets[i][0], streets[i + 1][0]
+            u_id = f"{st1}_{av_name}"  # South
+            v_id = f"{st2}_{av_name}"  # North
+            u_node, v_node = node_map[u_id], node_map[v_id]
+
+            if av_dir in ("northbound", "two-way"):
+                edges.append(GraphEdge(
+                    id=f"e_ny_{edge_idx}", source=u_id, target=v_id, name=f"{av_name.replace('_', ' ')} (NB)",
+                    length_m=650.0, lanes=3, free_speed_kmh=45.0, capacity_vph=2400.0,
+                    geometry=[[u_node.lng, u_node.lat], [v_node.lng, v_node.lat]], road_type="primary"
+                ))
+                edge_idx += 1
+            if av_dir in ("southbound", "two-way"):
+                edges.append(GraphEdge(
+                    id=f"e_ny_{edge_idx}", source=v_id, target=u_id, name=f"{av_name.replace('_', ' ')} (SB)",
+                    length_m=650.0, lanes=3, free_speed_kmh=45.0, capacity_vph=2400.0,
+                    geometry=[[v_node.lng, v_node.lat], [u_node.lng, u_node.lat]], road_type="primary"
+                ))
+                edge_idx += 1
+
+    # Add Broadway diagonal shortcut crossing Herald Square to Times Square
+    u_herald = "34th_6th_Ave"
+    v_times = "42nd_7th_Ave"
+    if u_herald in node_map and v_times in node_map:
+        edges.append(GraphEdge(
+            id="e_ny_broadway_shortcut", source=u_herald, target=v_times, name="Broadway Diagonal Corridor",
+            length_m=750.0, lanes=2, free_speed_kmh=40.0, capacity_vph=1600.0,
+            geometry=[[node_map[u_herald].lng, node_map[u_herald].lat], [node_map[v_times].lng, node_map[v_times].lat]],
+            road_type="primary"
+        ))
+
+    graph = UrbanFlowGraph(
+        graph_id="new_york",
+        name="New York City (Midtown Manhattan Grid)",
+        nodes=nodes,
+        edges=edges,
+        metadata=GraphMetadata(node_count=len(nodes), edge_count=len(edges), bbox=[-73.9930, 40.7488, -73.9700, 40.7658])
+    )
+
+    demand = TrafficDemand(
+        demand_id="new_york_midtown_demand",
+        description="Midtown commute demand from Herald Sq / Penn Station to Grand Central / Central Park",
+        demands=[
+            OriginDestinationDemand(origin="34th_8th_Ave", destination="57th_Park_Ave", volume_vph=2200.0),
+            OriginDestinationDemand(origin="34th_7th_Ave", destination="57th_5th_Ave", volume_vph=1800.0),
+            OriginDestinationDemand(origin="34th_6th_Ave", destination="57th_Madison_Ave", volume_vph=1600.0),
+            OriginDestinationDemand(origin="42nd_8th_Ave", destination="49th_Park_Ave", volume_vph=1400.0)
+        ]
+    )
+    return graph, demand
+

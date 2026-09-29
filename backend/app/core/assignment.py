@@ -1,12 +1,31 @@
 """
-Traffic Assignment Algorithms:
-1. All-or-Nothing (AON) Dijkstra Assignment
-2. Method of Successive Averages (MSA) for Wardrop User Equilibrium
-Includes path flow decomposition and convergence tracking.
+High-Performance Traffic Assignment Algorithms:
+1. GPU-Accelerated (PyTorch CUDA) & Vectorized BPR Travel Time Calculations
+2. Rustworkx (Rust-based) Single-Source Dijkstra with closure-based cost lookup (no per-edge update loop)
+3. Method of Successive Averages (MSA) with parallel origin batching via ThreadPoolExecutor
+4. ProcessPoolExecutor-compatible module-level worker functions for true CPU parallelism
 """
+import os
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any, Callable, Dict, List, Optional, Tuple
 import networkx as nx
-from typing import Any, Callable, Dict, List, Optional
+import numpy as np
+
+try:
+    import torch
+    _HAS_TORCH = True
+    _TORCH_DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+except ImportError:
+    _HAS_TORCH = False
+    _TORCH_DEVICE = None
+
+try:
+    import rustworkx as rx
+    _HAS_RUSTWORKX = True
+except ImportError:
+    _HAS_RUSTWORKX = False
+
 from app.core.graph_model import (
     UrbanFlowGraph,
     TrafficDemand,
@@ -19,13 +38,16 @@ from app.core.graph_model import (
 )
 from app.core.bpr import calculate_link_travel_time, calculate_congested_speed, classify_congestion_level
 
+# Use all available CPU cores for parallel origin batching
+_CPU_WORKERS = max(2, os.cpu_count() or 4)
+
 
 def build_networkx_graph(graph: UrbanFlowGraph, config: Optional[SimulationConfig] = None) -> nx.DiGraph:
     """Converts UrbanFlowGraph schema into a NetworkX DiGraph."""
     G = nx.DiGraph()
     for node in graph.nodes:
         G.add_node(node.id, lat=node.lat, lng=node.lng, label=node.label, type=node.type)
-    
+
     for edge in graph.edges:
         alpha = edge.alpha if edge.alpha is not None else (config.default_alpha if config else 0.15)
         beta = edge.beta if edge.beta is not None else (config.default_beta if config else 4.0)
@@ -50,6 +72,73 @@ def build_networkx_graph(graph: UrbanFlowGraph, config: Optional[SimulationConfi
     return G
 
 
+def _dijkstra_origins_batch(
+    origins_batch: List[Tuple[str, List[Tuple[str, float]]]],
+    node_to_idx: Dict[str, int],
+    idx_to_node: Dict[int, str],
+    edge_index_map: Dict[Tuple[str, str], str],
+    edge_id_to_idx: Dict[str, int],
+    costs_shared: np.ndarray,  # shared read-only view
+    G_rx_nodes: List[Tuple[int, int, float]],
+    num_nodes: int,
+) -> Tuple[np.ndarray, Dict[str, Dict[str, Any]]]:
+    """
+    Worker: runs Dijkstra for a batch of origins using a per-thread Rustworkx graph
+    built from current edge costs. Returns partial aux_flows and path history entries.
+    """
+    # Build a thread-local Rustworkx graph from current costs
+    G_local = rx.PyDiGraph()
+    for _ in range(num_nodes):
+        G_local.add_node(None)
+    for u_idx, v_idx, edge_arr_idx in G_rx_nodes:
+        G_local.add_edge(u_idx, v_idx, int(edge_arr_idx))
+
+    # closure captures costs_shared (numpy array view — safe read-only)
+    def cost_fn(edge_arr_idx: int) -> float:
+        return float(costs_shared[edge_arr_idx])
+
+    num_edges = len(G_rx_nodes)
+    aux_flows = np.zeros(num_edges, dtype=np.float32)
+    path_hist: Dict[str, Dict[str, Any]] = {}
+
+    for orig, dest_list in origins_batch:
+        orig_idx = node_to_idx[orig]
+        try:
+            shortest_paths = rx.dijkstra_shortest_paths(G_local, orig_idx, weight_fn=cost_fn)
+        except Exception:
+            continue
+
+        for dest, od_vol in dest_list:
+            dest_idx = node_to_idx[dest]
+            if dest_idx not in shortest_paths:
+                continue
+            path_indices = shortest_paths[dest_idx]
+            path_nodes = [idx_to_node[i] for i in path_indices]
+            path_str = "➔".join(path_nodes)
+            path_edge_ids = []
+            path_time_sec = 0.0
+
+            for i in range(len(path_nodes) - 1):
+                u, v = path_nodes[i], path_nodes[i + 1]
+                eid = edge_index_map.get((u, v))
+                if eid:
+                    e_idx = edge_id_to_idx[eid]
+                    path_edge_ids.append(eid)
+                    aux_flows[e_idx] += od_vol
+                    path_time_sec += costs_shared[e_idx]
+
+            if path_str not in path_hist:
+                path_hist[path_str] = {
+                    "nodes": path_nodes,
+                    "edges": path_edge_ids,
+                    "volume": 0.0,
+                    "time_mins": round(path_time_sec / 60.0, 2)
+                }
+            path_hist[path_str]["time_mins"] = round(path_time_sec / 60.0, 2)
+
+    return aux_flows, path_hist
+
+
 def simulate_traffic_msa(
     graph: UrbanFlowGraph,
     demand: TrafficDemand,
@@ -58,96 +147,178 @@ def simulate_traffic_msa(
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None
 ) -> SimulationResult:
     """
-    Executes User Equilibrium traffic assignment using the Method of Successive Averages (MSA).
-    Tracks edge flows, path flow distributions, and convergence.
+    Executes User Equilibrium traffic assignment using MSA with:
+    - GPU-vectorized BPR cost updates (CUDA tensor ops)
+    - Parallel Dijkstra across origin batches via ThreadPoolExecutor
+    - Rustworkx per-thread graphs with closure-based cost lookup (eliminates slow Python update loop)
     """
     if config is None:
         config = SimulationConfig()
 
-    G = build_networkx_graph(graph, config)
-    edge_dict = {edge.id: edge for edge in graph.edges}
-    
-    edge_flows: Dict[str, float] = {edge.id: 0.0 for edge in graph.edges}
-    path_history: Dict[str, Dict[str, Any]] = {}
-
     if not demand.demands or len(graph.edges) == 0:
         return _build_empty_result(graph)
 
+    edges = graph.edges
+    nodes = graph.nodes
+    num_edges = len(edges)
+    num_nodes = len(nodes)
+
+    node_to_idx: Dict[str, int] = {node.id: idx for idx, node in enumerate(nodes)}
+    idx_to_node: Dict[int, str] = {idx: node.id for idx, node in enumerate(nodes)}
+    edge_index_map: Dict[Tuple[str, str], str] = {(e.source, e.target): e.id for e in edges}
+    edge_id_to_idx: Dict[str, int] = {e.id: idx for idx, e in enumerate(edges)}
+
+    # Pre-extract vector arrays for high-speed mathematical operations
+    t0_arr = np.array([float(e.free_flow_time_sec) for e in edges], dtype=np.float32)
+    cap_arr = np.array([float(max(e.capacity_vph, 1.0)) for e in edges], dtype=np.float32)
+    alpha_arr = np.array([float(e.alpha if e.alpha is not None else config.default_alpha) for e in edges], dtype=np.float32)
+    beta_arr = np.array([float(e.beta if e.beta is not None else config.default_beta) for e in edges], dtype=np.float32)
+    cost_model_arr = [e.cost_model or config.cost_model for e in edges]
+    braess_mask = np.array([1 if m == "braess_exact" else 0 for m in cost_model_arr], dtype=np.int8)
+
+    # Precompute Rustworkx edge list: (u_idx, v_idx, arr_idx) — arr_idx is the edge's position in our arrays
+    use_rx = _HAS_RUSTWORKX
+    G_rx_nodes: List[Tuple[int, int, int]] = []  # (u_idx, v_idx, edge_arr_idx)
+    if use_rx:
+        for arr_idx, e in enumerate(edges):
+            u_idx = node_to_idx.get(e.source)
+            v_idx = node_to_idx.get(e.target)
+            if u_idx is not None and v_idx is not None:
+                G_rx_nodes.append((u_idx, v_idx, arr_idx))
+
+    # Initialize GPU tensors if CUDA is active
+    use_gpu = _HAS_TORCH and _TORCH_DEVICE and _TORCH_DEVICE.type == "cuda" and num_edges > 20
+    if use_gpu:
+        t0_t = torch.tensor(t0_arr, dtype=torch.float32, device=_TORCH_DEVICE)
+        cap_t = torch.tensor(cap_arr, dtype=torch.float32, device=_TORCH_DEVICE)
+        alpha_t = torch.tensor(alpha_arr, dtype=torch.float32, device=_TORCH_DEVICE)
+        beta_t = torch.tensor(beta_arr, dtype=torch.float32, device=_TORCH_DEVICE)
+        flow_t = torch.zeros(num_edges, dtype=torch.float32, device=_TORCH_DEVICE)
+    else:
+        flow_np = np.zeros(num_edges, dtype=np.float32)
+
+    # Group OD demands by origin for single-source Dijkstra batching
+    od_by_origin: Dict[str, List[Tuple[str, float]]] = {}
+    for od in demand.demands:
+        vol = od.volume_vph * demand_multiplier
+        if vol > 0 and od.origin in node_to_idx and od.destination in node_to_idx:
+            od_by_origin.setdefault(od.origin, []).append((od.destination, vol))
+
+    # Split origins into batches across worker threads
+    origin_items = list(od_by_origin.items())
+    num_workers = min(_CPU_WORKERS, max(1, len(origin_items)))
+    batch_size = max(1, (len(origin_items) + num_workers - 1) // num_workers)
+    origin_batches = [origin_items[i:i + batch_size] for i in range(0, len(origin_items), batch_size)]
+
+    path_history: Dict[str, Dict[str, Any]] = {}
     converged = False
     iterations_run = 0
+    edge_flows_arr = np.zeros(num_edges, dtype=np.float32)
 
-    # Iterative MSA Algorithm
+    # Iterative MSA Wardrop Equilibrium Loop
     for k in range(1, config.max_iterations + 1):
         iterations_run = k
-        
-        # 1. Update link costs based on current flows
-        for u, v, data in G.edges(data=True):
-            eid = data["edge_id"]
-            current_v = edge_flows[eid]
-            t = calculate_link_travel_time(
-                free_flow_time_sec=data["t0"],
-                volume_vph=current_v,
-                capacity_vph=data["capacity_vph"],
-                alpha=data["alpha"],
-                beta=data["beta"],
-                cost_model=data.get("cost_model", "bpr"),
-                length_m=data["length_m"],
-                free_speed_kmh=data["free_speed_kmh"]
-            )
-            data["cost"] = t
 
-        # 2. Auxiliary All-or-Nothing (AON) Assignment
-        aux_flows: Dict[str, float] = {edge.id: 0.0 for edge in graph.edges}
+        # 1. Update link costs (GPU-vectorized BPR)
+        if use_gpu:
+            flow_np_cur = flow_t.cpu().numpy()
+            vc_t = flow_t / cap_t
+            costs_t = t0_t * (1.0 + alpha_t * torch.pow(vc_t, beta_t))
+            costs_np = costs_t.cpu().numpy()
+        else:
+            flow_np_cur = flow_np
+            vc_np = flow_np / cap_arr
+            costs_np = t0_arr * (1.0 + alpha_arr * np.power(vc_np, beta_arr))
 
-        for od in demand.demands:
-            od_vol = od.volume_vph * demand_multiplier
-            if od_vol <= 0:
-                continue
-            try:
-                path = nx.shortest_path(G, source=od.origin, target=od.destination, weight="cost")
-                path_str = " ➔ ".join(path)
-                
-                # Calculate path travel time
-                path_edge_ids = []
-                path_time_sec = 0.0
-                for i in range(len(path) - 1):
-                    u, v = path[i], path[i + 1]
-                    eid = G[u][v]["edge_id"]
-                    path_edge_ids.append(eid)
-                    aux_flows[eid] += od_vol
-                    path_time_sec += G[u][v]["cost"]
+        # Handle braess_exact custom cost model overrides
+        if braess_mask.any():
+            for i in np.where(braess_mask)[0]:
+                v = float(flow_np_cur[i])
+                costs_np[i] = float(alpha_arr[i] * v if alpha_arr[i] > 0 else t0_arr[i])
 
-                # Accumulate path flow info
-                if path_str not in path_history:
-                    path_history[path_str] = {
-                        "nodes": path,
-                        "edges": path_edge_ids,
-                        "volume": 0.0,
-                        "time_mins": round(path_time_sec / 60.0, 2)
-                    }
-                path_history[path_str]["time_mins"] = round(path_time_sec / 60.0, 2)
-            except (nx.NetworkXNoPath, nx.NodeNotFound):
-                continue
+        # 2. Auxiliary All-or-Nothing (AON) Assignment — parallelized across origin batches
+        aux_flows_np = np.zeros(num_edges, dtype=np.float32)
 
-        # 3. Method of Successive Averages Step Size: lambda_k = 1 / (k + 1)
+        if use_rx and origin_batches:
+            costs_view = costs_np  # read-only view passed to workers
+
+            if len(origin_batches) == 1:
+                # Single batch — no threading overhead
+                batch_flows, batch_hist = _dijkstra_origins_batch(
+                    origin_batches[0], node_to_idx, idx_to_node,
+                    edge_index_map, edge_id_to_idx, costs_view, G_rx_nodes, num_nodes
+                )
+                aux_flows_np += batch_flows
+                path_history.update(batch_hist)
+            else:
+                with ThreadPoolExecutor(max_workers=num_workers) as pool:
+                    futures = [
+                        pool.submit(
+                            _dijkstra_origins_batch,
+                            batch, node_to_idx, idx_to_node,
+                            edge_index_map, edge_id_to_idx, costs_view, G_rx_nodes, num_nodes
+                        )
+                        for batch in origin_batches
+                    ]
+                    for fut in as_completed(futures):
+                        batch_flows, batch_hist = fut.result()
+                        aux_flows_np += batch_flows
+                        path_history.update(batch_hist)
+        else:
+            # NetworkX fallback
+            G_nx = build_networkx_graph(graph, config)
+            for u, v, data in G_nx.edges(data=True):
+                eid = data["edge_id"]
+                data["cost"] = float(costs_np[edge_id_to_idx[eid]])
+
+            for orig, dest_list in od_by_origin.items():
+                try:
+                    paths = nx.single_source_dijkstra_path(G_nx, orig, weight="cost")
+                    for dest, od_vol in dest_list:
+                        if dest in paths:
+                            path = paths[dest]
+                            path_str = "➔".join(path)
+                            path_edge_ids = []
+                            path_time_sec = 0.0
+                            for i in range(len(path) - 1):
+                                u, v = path[i], path[i + 1]
+                                eid = G_nx[u][v]["edge_id"]
+                                e_idx = edge_id_to_idx[eid]
+                                path_edge_ids.append(eid)
+                                aux_flows_np[e_idx] += od_vol
+                                path_time_sec += costs_np[e_idx]
+                            if path_str not in path_history:
+                                path_history[path_str] = {
+                                    "nodes": path, "edges": path_edge_ids,
+                                    "volume": 0.0, "time_mins": round(path_time_sec / 60.0, 2)
+                                }
+                            path_history[path_str]["time_mins"] = round(path_time_sec / 60.0, 2)
+                except Exception:
+                    continue
+
+        # 3. Method of Successive Averages step
         step_size = 1.0 / float(k + 1) if config.algorithm == "msa" else 1.0
 
-        # 4. Check Convergence: Relative Gap
-        max_flow_diff = 0.0
-        total_flow = sum(edge_flows.values())
-
-        for eid in edge_flows:
-            old_flow = edge_flows[eid]
-            new_flow = (1.0 - step_size) * old_flow + step_size * aux_flows[eid]
-            max_flow_diff += abs(new_flow - old_flow)
-            edge_flows[eid] = new_flow
+        if use_gpu:
+            aux_t = torch.tensor(aux_flows_np, dtype=torch.float32, device=_TORCH_DEVICE)
+            flow_diff_t = torch.abs(aux_t - flow_t) * step_size
+            max_flow_diff = float(torch.sum(flow_diff_t).item())
+            flow_t = (1.0 - step_size) * flow_t + step_size * aux_t
+            total_flow = float(torch.sum(flow_t).item())
+            edge_flows_arr = flow_t.cpu().numpy()
+        else:
+            old_flow = flow_np.copy()
+            flow_np = (1.0 - step_size) * flow_np + step_size * aux_flows_np
+            max_flow_diff = float(np.sum(np.abs(flow_np - old_flow)))
+            total_flow = float(np.sum(flow_np))
+            edge_flows_arr = flow_np
 
         if progress_callback:
             progress_callback({
                 "iteration": k,
                 "max_iterations": config.max_iterations,
                 "converged": False,
-                "edge_volumes": {eid: round(volume, 1) for eid, volume in edge_flows.items()}
+                "edge_volumes": {edges[i].id: round(float(edge_flows_arr[i]), 1) for i in range(num_edges)}
             })
 
         if total_flow > 0 and (max_flow_diff / max(total_flow, 1.0)) < config.convergence_tolerance and k >= 4:
@@ -157,7 +328,7 @@ def simulate_traffic_msa(
                     "iteration": k,
                     "max_iterations": config.max_iterations,
                     "converged": True,
-                    "edge_volumes": {eid: round(volume, 1) for eid, volume in edge_flows.items()}
+                    "edge_volumes": {edges[i].id: round(float(edge_flows_arr[i]), 1) for i in range(num_edges)}
                 })
             break
 
@@ -167,10 +338,10 @@ def simulate_traffic_msa(
     total_travel_time_sec = 0.0
     severely_congested_count = 0
 
-    for edge in graph.edges:
-        vol = edge_flows.get(edge.id, 0.0)
-        t0 = edge.free_flow_time_sec
-        congested_t = calculate_link_travel_time(
+    for i, edge in enumerate(edges):
+        vol = float(edge_flows_arr[i])
+        t0 = float(t0_arr[i])
+        congested_t = float(calculate_link_travel_time(
             free_flow_time_sec=t0,
             volume_vph=vol,
             capacity_vph=edge.capacity_vph,
@@ -179,7 +350,7 @@ def simulate_traffic_msa(
             cost_model=edge.cost_model,
             length_m=edge.length_m,
             free_speed_kmh=edge.free_speed_kmh
-        )
+        ))
         vc = vol / max(edge.capacity_vph, 1.0)
         speed = calculate_congested_speed(edge.length_m, congested_t)
         level = classify_congestion_level(vc)
@@ -212,11 +383,10 @@ def simulate_traffic_msa(
 
         total_travel_time_sec += vol * congested_t
 
-    # Path flows reconstruction
     path_flows_list: List[PathFlowInfo] = []
+    edge_flows_dict = {edges[i].id: float(edge_flows_arr[i]) for i in range(num_edges)}
     for p_key, p_data in path_history.items():
-        # Estimate path flow from constituent edge minimum flow
-        constituent_flows = [edge_flows.get(e, 0.0) for e in p_data["edges"]]
+        constituent_flows = [edge_flows_dict.get(e, 0.0) for e in p_data["edges"]]
         est_vol = min(constituent_flows) if constituent_flows else 0.0
         if est_vol > 1.0:
             path_flows_list.append(PathFlowInfo(

@@ -1,10 +1,21 @@
 import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
-import { Layers, Play, RotateCcw, Sliders, Zap, Plus, Ban, LocateFixed, Map, Route } from 'lucide-react';
+import {
+  Layers,
+  Play,
+  RotateCcw,
+  Sliders,
+  Zap,
+  Plus,
+  Ban,
+  LocateFixed,
+  Map as MapIcon,
+  Route,
+  CircleDot
+} from 'lucide-react';
 import {
   evaluateIntervention,
   fetchGraph,
-  importOSMPlace,
   analyzeArea,
   startOptimizationStream,
   SimulationProgressEvent,
@@ -22,13 +33,6 @@ import {
 import 'leaflet/dist/leaflet.css';
 
 const TILE_URL = import.meta.env.VITE_MAP_TILE_URL || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-const scenarios = [
-  ['braess_4node', 'Classic Braess paradox'],
-  ['expanded_8node', 'Expanded multi-hub'],
-  ['grid_3x3', '3x3 urban grid'],
-  ['bottleneck_bridge', 'Bottleneck bridge'],
-  ['kochi_central', 'Kochi arterial network']
-];
 
 function edgeColor(vc: number, closed = false, widened = false) {
   if (closed) return '#94a3b8';
@@ -46,13 +50,10 @@ function edgePath(graph: UrbanFlowGraph, edge: GraphEdge): L.LatLngExpression[] 
 }
 
 export default function App() {
-  const [scenario, setScenario] = useState('kochi_central');
-  const [importedScenario, setImportedScenario] = useState<[string, string] | null>(null);
-  const [importingPlace, setImportingPlace] = useState(false);
-  const [viewMode, setViewMode] = useState<'live' | 'graph'>('live');
-  const [livePlace, setLivePlace] = useState<'kochi' | 'new_york' | 'custom'>('kochi');
+  const [selectedScenario, setSelectedScenario] = useState<string>('kochi_central');
   const [graph, setGraph] = useState<UrbanFlowGraph | null>(null);
   const [simulation, setSimulation] = useState<SimulationResult | null>(null);
+  const [baselineSimulation, setBaselineSimulation] = useState<SimulationResult | null>(null);
   const [progress, setProgress] = useState<SimulationProgressEvent | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [interventions, setInterventions] = useState<InterventionAction[]>([]);
@@ -60,19 +61,30 @@ export default function App() {
   const [optimization, setOptimization] = useState<OptimizationResult | null>(null);
   const [discoveredRecommendations, setDiscoveredRecommendations] = useState<OptimizationResult['recommendations']>([]);
   const [optimizationProgress, setOptimizationProgress] = useState({ current: 0, total: 0 });
+
+  // Map & Visual States
   const [showNames, setShowNames] = useState(true);
-  const [monochrome, setMonochrome] = useState(false);
+  const [showNodes, setShowNodes] = useState(true);
   const [showBasemap, setShowBasemap] = useState(true);
   const [showFlow, setShowFlow] = useState(true);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [analysisScope, setAnalysisScope] = useState<'network' | 'area'>('network');
   const [areaMode, setAreaMode] = useState(false);
   const [areaId, setAreaId] = useState<string | null>(null);
-  const [demandMultiplier, setDemandMultiplier] = useState(1);
-  const [config, setConfig] = useState<SimulationConfig>({ algorithm: 'msa', max_iterations: 30, convergence_tolerance: 0.001, default_alpha: 0.15, default_beta: 4, cost_model: 'bpr' });
+  const [demandMultiplier, setDemandMultiplier] = useState(1.0);
+  const [roadDensity, setRoadDensity] = useState(1.0);
+  const [config, setConfig] = useState<SimulationConfig>({
+    algorithm: 'msa',
+    max_iterations: 30,
+    convergence_tolerance: 0.001,
+    default_alpha: 0.15,
+    default_beta: 4.0,
+    cost_model: 'bpr'
+  });
   const [loading, setLoading] = useState(false);
   const [optimizing, setOptimizing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [queryStatus, setQueryStatus] = useState<{ type: 'loading' | 'success'; message: string } | null>(null);
+
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<L.Map | null>(null);
   const layerGroup = useRef<L.LayerGroup | null>(null);
@@ -81,51 +93,45 @@ export default function App() {
   const stopStream = useRef<(() => void) | null>(null);
   const stopOptimizer = useRef<(() => void) | null>(null);
   const areaRect = useRef<L.Rectangle | null>(null);
-  const areaModeRef = useRef(false);
+  const lastGraphId = useRef<string | null>(null);
+
+  const isSynthetic = ['braess_4node', 'expanded_8node', 'grid_3x3', 'bottleneck_bridge'].includes(selectedScenario);
 
   const runLiveSimulation = (graphId: string, nextConfig = config) => {
     stopStream.current?.();
     setLoading(true);
     setProgress(null);
     setError(null);
-    stopStream.current = startSimulationStream(graphId, demandMultiplier, nextConfig,
+    stopStream.current = startSimulationStream(
+      graphId,
+      demandMultiplier,
+      nextConfig,
       (event) => setProgress(event),
       (result) => {
         setSimulation(result);
+        setBaselineSimulation((prev) => prev ?? result);
         setLoading(false);
         setProgress(null);
       },
       (streamError) => {
         setError(streamError.message);
         setLoading(false);
-      });
+      }
+    );
   };
 
-  const handleLivePlaceChange = async (place: 'kochi' | 'new_york' | 'custom') => {
-    setLivePlace(place);
-    if (place === 'custom') {
-      setViewMode('live');
+  const handleScenarioChange = (scenarioId: string) => {
+    if (scenarioId === 'custom_square') {
       setAreaMode(true);
+      setShowBasemap(true);
       return;
     }
-    if (place === 'kochi') {
-      setViewMode('live');
-      setScenario('kochi_central');
-      return;
-    }
-    setImportingPlace(true);
-    setError(null);
-    try {
-      const imported = await importOSMPlace({ place: 'New York, New York, USA', network_type: 'drive', demand_multiplier: demandMultiplier, config });
-      setImportedScenario([imported.graph.graph_id, imported.graph.name]);
-      setScenario(imported.graph.graph_id);
-      setGraph(imported.graph);
-      setSimulation(imported.result);
-      setAnalysisScope('network');
-    } catch (importError) {
-      setError((importError as Error).message);
-    } finally {
-      setImportingPlace(false);
+    setAreaMode(false);
+    setSelectedScenario(scenarioId);
+    if (scenarioId.startsWith('braess') || scenarioId === 'grid_3x3' || scenarioId === 'bottleneck_bridge') {
+      setShowBasemap(false);
+    } else {
+      setShowBasemap(true);
     }
   };
 
@@ -133,182 +139,370 @@ export default function App() {
     let active = true;
     setGraph(null);
     setSimulation(null);
+    setBaselineSimulation(null);
     setInterventions([]);
     setReport(null);
     setOptimization(null);
     setDiscoveredRecommendations([]);
     setAreaId(null);
-    setAnalysisScope('network');
-    fetchGraph(scenario).then((data) => {
-      if (!active) return;
-      setGraph(data);
-      runLiveSimulation(data.graph_id);
-    }).catch((loadError: Error) => active && setError(loadError.message));
-    return () => { active = false; stopStream.current?.(); };
-  }, [scenario]);
 
-  useEffect(() => {
-    areaModeRef.current = areaMode;
-  }, [areaMode]);
+    fetchGraph(selectedScenario)
+      .then((data) => {
+        if (!active) return;
+        setGraph(data);
+        runLiveSimulation(data.graph_id);
+      })
+      .catch((loadError: Error) => active && setError(loadError.message));
 
+    return () => {
+      active = false;
+      stopStream.current?.();
+    };
+  }, [selectedScenario]);
+
+  // Leaflet Map Initialization with Native Smooth Dragging & Zooming
   useEffect(() => {
     if (!mapRef.current || mapInstance.current) return;
-    const map = L.map(mapRef.current, { zoomControl: true, preferCanvas: true, attributionControl: true }).setView([9.9816, 76.2999], 12);
+
+    const map = L.map(mapRef.current, {
+      zoomControl: true,
+      preferCanvas: true,
+      attributionControl: true,
+      dragging: true,
+      scrollWheelZoom: true,
+      touchZoom: true,
+      doubleClickZoom: true
+    }).setView([9.9816, 76.2999], 13);
+
     mapInstance.current = map;
-    map.dragging.disable();
     layerGroup.current = L.layerGroup().addTo(map);
     flowLayerGroup.current = L.layerGroup().addTo(map);
-    requestAnimationFrame(() => map.invalidateSize({ pan: false }));
-    const container = map.getContainer();
-    let panStart: { x: number; y: number } | null = null;
-    const onPointerDown = (event: PointerEvent) => {
-      if (areaModeRef.current || event.button !== 0) return;
-      panStart = { x: event.clientX, y: event.clientY };
-      container.setPointerCapture?.(event.pointerId);
-      container.style.cursor = 'grabbing';
-    };
-    const onPointerMove = (event: PointerEvent) => {
-      if (!panStart || areaModeRef.current) return;
-      const dx = event.clientX - panStart.x;
-      const dy = event.clientY - panStart.y;
-      if (dx === 0 && dy === 0) return;
-      map.panBy([-dx, -dy], { animate: false });
-      panStart = { x: event.clientX, y: event.clientY };
-    };
-    const onPointerUp = (event: PointerEvent) => {
-      panStart = null;
-      container.releasePointerCapture?.(event.pointerId);
-      container.style.cursor = '';
-    };
-    container.addEventListener('pointerdown', onPointerDown);
-    container.addEventListener('pointermove', onPointerMove);
-    container.addEventListener('pointerup', onPointerUp);
-    container.addEventListener('pointercancel', onPointerUp);
-    const cleanup = (): void => {
-      container.removeEventListener('pointerdown', onPointerDown);
-      container.removeEventListener('pointermove', onPointerMove);
-      container.removeEventListener('pointerup', onPointerUp);
-      container.removeEventListener('pointercancel', onPointerUp);
+
+    requestAnimationFrame(() => map.invalidateSize());
+
+    return () => {
       map.off();
       map.remove();
       mapInstance.current = null;
       layerGroup.current = null;
     };
-    return cleanup;
   }, []);
 
+  // Custom Bounding Box Area Selection (Only active when areaMode is toggled on)
   useEffect(() => {
     const map = mapInstance.current;
     if (!map) return;
-    map.dragging.disable();
+
     if (areaMode) {
+      map.dragging.disable();
       map.scrollWheelZoom.disable();
     } else {
+      map.dragging.enable();
       map.scrollWheelZoom.enable();
     }
+
     const onMouseDown = (event: L.LeafletMouseEvent) => {
       if (!areaMode) return;
       event.originalEvent.preventDefault();
       event.originalEvent.stopPropagation();
       const start = event.latlng;
+
       const move = (moveEvent: L.LeafletMouseEvent) => {
         areaRect.current?.remove();
-        areaRect.current = L.rectangle(L.latLngBounds(start, moveEvent.latlng), { color: '#172033', weight: 2, fillOpacity: 0.08 }).addTo(map);
+        areaRect.current = L.rectangle(L.latLngBounds(start, moveEvent.latlng), {
+          color: '#0f172a',
+          weight: 2,
+          fillOpacity: 0.12,
+          dashArray: '4,4'
+        }).addTo(map);
       };
+
       const end = async (endEvent: L.LeafletMouseEvent) => {
-        map.off('mousemove', move); map.off('mouseup', end);
+        map.off('mousemove', move);
+        map.off('mouseup', end);
         const bounds = L.latLngBounds(start, endEvent.latlng);
         if (bounds.getNorthEast().equals(bounds.getSouthWest())) return;
+
         try {
-          setLoading(true); setError(null);
-          const analyzed = await analyzeArea({ graph_id: graph?.graph_id || scenario, min_lat: bounds.getSouth(), min_lng: bounds.getWest(), max_lat: bounds.getNorth(), max_lng: bounds.getEast(), demand_multiplier: demandMultiplier, config, fetch_osm: true });
-          setAreaId(analyzed.area_id); setGraph(analyzed.graph); setSimulation(analyzed.result); setAnalysisScope('area'); setAreaMode(false);
-        } catch (analysisError) { setError((analysisError as Error).message); }
-        finally { setLoading(false); }
+          setLoading(true);
+          setError(null);
+          setQueryStatus({
+            type: 'loading',
+            message: `Extracting road network for bounds [${bounds.getSouth().toFixed(3)}, ${bounds.getWest().toFixed(3)} ➔ ${bounds.getNorth().toFixed(3)}, ${bounds.getEast().toFixed(3)}]...`
+          });
+
+          const analyzed = await analyzeArea({
+            graph_id: graph?.graph_id || selectedScenario,
+            min_lat: bounds.getSouth(),
+            min_lng: bounds.getWest(),
+            max_lat: bounds.getNorth(),
+            max_lng: bounds.getEast(),
+            demand_multiplier: demandMultiplier,
+            road_density: roadDensity,
+            config,
+            fetch_osm: true
+          });
+
+          setAreaId(analyzed.area_id);
+          setGraph(analyzed.graph);
+          setSimulation(analyzed.result);
+          setBaselineSimulation(analyzed.result);
+          setAreaMode(false);
+          map.dragging.enable();
+          map.scrollWheelZoom.enable();
+
+          setQueryStatus({
+            type: 'success',
+            message: `Extracted ${analyzed.graph.edges.length} road links & ${analyzed.graph.nodes.length} intersections (${analyzed.result.summary_metrics.avg_travel_time_mins} min avg trip).`
+          });
+          setTimeout(() => setQueryStatus(null), 4500);
+
+          const newBounds = L.latLngBounds(analyzed.graph.nodes.map((n) => [n.lat, n.lng]));
+          if (newBounds.isValid()) {
+            map.fitBounds(newBounds.pad(0.08), { maxZoom: 16 });
+          }
+        } catch (analysisError) {
+          setError((analysisError as Error).message);
+          setQueryStatus(null);
+          setAreaMode(false);
+          map.dragging.enable();
+          map.scrollWheelZoom.enable();
+        } finally {
+          setLoading(false);
+        }
       };
-      map.on('mousemove', move); map.on('mouseup', end);
+
+      map.on('mousemove', move);
+      map.on('mouseup', end);
     };
+
     map.on('mousedown', onMouseDown);
     return () => {
       map.off('mousedown', onMouseDown);
+      map.dragging.enable();
       map.scrollWheelZoom.enable();
     };
-  }, [areaMode, scenario, demandMultiplier, config, graph?.graph_id]);
+  }, [areaMode, selectedScenario, demandMultiplier, roadDensity, config, graph?.graph_id]);
 
+  // Basemap Toggle
   useEffect(() => {
     const map = mapInstance.current;
     if (!map) return;
-    if (scenario === 'kochi_central' && showBasemap) {
-      if (!tileLayer.current) tileLayer.current = L.tileLayer(TILE_URL, { maxZoom: 19, attribution: import.meta.env.VITE_MAP_ATTRIBUTION || '&copy; OpenStreetMap contributors' }).addTo(map);
+
+    if (showBasemap) {
+      if (!tileLayer.current) {
+        tileLayer.current = L.tileLayer(TILE_URL, {
+          maxZoom: 19,
+          attribution: import.meta.env.VITE_MAP_ATTRIBUTION || '&copy; OpenStreetMap contributors'
+        }).addTo(map);
+      }
     } else {
       tileLayer.current?.remove();
       tileLayer.current = null;
     }
-  }, [scenario, showBasemap]);
+  }, [showBasemap]);
 
+  // Render Vector Network, Directional Flows, and On-Graph Badges
   useEffect(() => {
     const map = mapInstance.current;
     const layers = layerGroup.current;
     if (!map || !layers || !graph) return;
+
     layers.clearLayers();
     const bounds = L.latLngBounds([]);
+
     graph.nodes.forEach((node) => bounds.extend([node.lat, node.lng]));
+
+    const recommendations = optimization?.recommendations || discoveredRecommendations;
+    const recMap = new Map(recommendations.map((r) => [r.edge_id, r]));
+
     graph.edges.forEach((edge) => {
       const points = edgePath(graph, edge);
       if (points.length < 2) return;
       points.forEach((point) => bounds.extend(point));
+
       const metric = simulation?.edge_metrics[edge.id];
+      const baseMetric = baselineSimulation?.edge_metrics[edge.id];
       const volume = metric?.volume_vph ?? progress?.edge_volumes[edge.id] ?? 0;
       const edgeActions = interventions.filter((action) => action.edge_id === edge.id);
       const closed = edgeActions.length > 0 && edgeActions[edgeActions.length - 1].action === 'CLOSE';
       const widened = interventions.some((action) => action.action === 'WIDEN' && action.edge_id === edge.id);
       const vc = metric?.vc_ratio ?? volume / Math.max(edge.capacity_vph, 1);
-      const recommendation = (optimization?.recommendations || discoveredRecommendations).find((item) => item.edge_id === edge.id);
-      const line = L.polyline(points, { color: monochrome ? '#334155' : edgeColor(vc, closed, widened), weight: selectedEdgeId === edge.id ? 8 : Math.max(3, Math.min(9, edge.lanes + 1)), opacity: closed ? 0.45 : 0.88, dashArray: closed ? '8 7' : undefined });
-      if (showNames) line.bindTooltip(`${edge.name || edge.id} | ${Math.round(volume).toLocaleString()} vph`, { sticky: true });
-      line.bindPopup(`<strong>${edge.name || edge.id}</strong><br>${edge.source} → ${edge.target}<br>Vehicles: ${Math.round(volume).toLocaleString()} vph<br>Road capacity: ${Math.round(edge.capacity_vph).toLocaleString()} vph<br>Lanes: ${edge.lanes}<br>V/C: ${vc.toFixed(2)}${recommendation ? `<br><b>Optimizer: ${recommendation.type === 'REMOVE_ROAD' ? 'CLOSE' : 'WIDEN'}</b>` : ''}`);
+      const recommendation = recMap.get(edge.id);
+
+      const currentTimeMins = metric ? metric.congested_time_sec / 60 : 0;
+      const baseTimeMins = baseMetric ? baseMetric.congested_time_sec / 60 : currentTimeMins;
+      const timeSavedMins = baseTimeMins - currentTimeMins;
+
+      // Highlighted stroke style
+      let strokeColor = edgeColor(vc, closed, widened);
+      let strokeWidth = Math.max(3.5, Math.min(8.5, (edge.lanes || 1) * 1.8 + 1));
+      let strokeDashArray: string | undefined = undefined;
+      let strokeOpacity = 0.88;
+
+      if (closed) {
+        strokeColor = '#dc2626';
+        strokeWidth = 6;
+        strokeDashArray = '6 6';
+        strokeOpacity = 0.85;
+      } else if (widened) {
+        strokeColor = '#2563eb';
+        strokeWidth = 9;
+        strokeOpacity = 0.95;
+      }
+
+      if (selectedEdgeId === edge.id) {
+        strokeWidth = 9;
+        strokeColor = closed ? '#dc2626' : (widened ? '#2563eb' : '#0f172a');
+      }
+
+      const line = L.polyline(points, {
+        color: strokeColor,
+        weight: strokeWidth,
+        opacity: strokeOpacity,
+        dashArray: strokeDashArray
+      });
+
+      // Tooltip with detailed traffic flow and time saved
+      let tooltipContent = `<strong>${edge.name || edge.id}</strong><br>${edge.source} ➔ ${edge.target}<br>Flow: ${Math.round(volume).toLocaleString()} vph | Capacity: ${edge.capacity_vph.toLocaleString()} vph<br>Time: ${currentTimeMins.toFixed(1)} min (V/C: ${vc.toFixed(2)})`;
+      if (closed) {
+        tooltipContent += `<br><span style="color: #dc2626; font-weight: bold;">🚫 ROAD BLOCKED / CLOSED</span>`;
+      } else if (widened) {
+        tooltipContent += `<br><span style="color: #2563eb; font-weight: bold;">➕ ROAD EXPANDED (+1 LANE)</span>`;
+      }
+      if (Math.abs(timeSavedMins) > 0.05) {
+        tooltipContent += `<br><span style="color: ${timeSavedMins > 0 ? '#059669' : '#dc2626'}; font-weight: bold;">${timeSavedMins > 0 ? `⚡ Time Saved: -${timeSavedMins.toFixed(1)} min` : `⚠️ Delay: +${Math.abs(timeSavedMins).toFixed(1)} min`}</span>`;
+      }
+      if (recommendation) {
+        tooltipContent += `<br><strong style="color: ${recommendation.type === 'REMOVE_ROAD' ? '#dc2626' : '#059669'};">⚡ Optimizer: ${recommendation.type === 'REMOVE_ROAD' ? '🚫 BLOCK ROAD' : '➕ WIDEN ROAD'} (-${recommendation.travel_time_reduction_pct}% latency)</strong>`;
+      }
+
+      if (showNames) {
+        line.bindTooltip(tooltipContent, { sticky: true });
+      }
+
       line.on('click', () => setSelectedEdgeId(edge.id));
       line.addTo(layers);
-      if (recommendation) {
-        line.setStyle({ color: recommendation.type === 'REMOVE_ROAD' ? '#dc2626' : '#2563eb', weight: 9, dashArray: recommendation.type === 'REMOVE_ROAD' ? '10 6' : undefined });
+
+      // Optimizer On-Graph Badge or Active Intervention Badge
+      if (points.length >= 2) {
+        const midIdx = Math.floor(points.length / 2);
+        const pA = L.latLng(points[Math.max(0, midIdx - 1)]);
+        const pB = L.latLng(points[Math.min(points.length - 1, midIdx)]);
+        const midLatLng = L.latLng((pA.lat + pB.lat) / 2, (pA.lng + pB.lng) / 2);
+
+        let badgeHtml: string | null = null;
+        if (closed) {
+          badgeHtml = `<div class="on-graph-badge badge-remove" style="background:#dc2626; border-color:#fff;">🚫 CLOSED</div>`;
+        } else if (widened) {
+          badgeHtml = `<div class="on-graph-badge badge-widen" style="background:#2563eb; border-color:#fff;">➕ WIDENED</div>`;
+        } else if (recommendation) {
+          badgeHtml = recommendation.type === 'REMOVE_ROAD'
+            ? `<div class="on-graph-badge badge-remove">🚫 BLOCK -${recommendation.travel_time_reduction_pct}%</div>`
+            : `<div class="on-graph-badge badge-widen">➕ WIDEN -${recommendation.travel_time_reduction_pct}%</div>`;
+        }
+
+        if (badgeHtml) {
+          const badgeIcon = L.divIcon({
+            className: 'on-graph-badge-container',
+            html: badgeHtml,
+            iconSize: [88, 22],
+            iconAnchor: [44, 11]
+          });
+
+          const badgeMarker = L.marker(midLatLng, { icon: badgeIcon, interactive: true });
+          if (recommendation && !closed && !widened) {
+            badgeMarker.on('click', (e) => {
+              L.DomEvent.stopPropagation(e);
+              applyActions([...interventions, recommendation.action]);
+            });
+          }
+          badgeMarker.addTo(layers);
+        }
       }
     });
-    graph.nodes.forEach((node) => {
-      const marker = L.circleMarker([node.lat, node.lng], { radius: node.type === 'intersection' ? 4 : 7, color: '#172033', weight: 1, fillColor: node.type === 'origin' ? '#2563eb' : node.type === 'destination' ? '#059669' : '#ffffff', fillOpacity: 1 });
-      if (showNames) marker.bindTooltip(node.label || node.id);
-      marker.addTo(layers);
-    });
-    if (bounds.isValid() && map.getZoom() < 3) map.fitBounds(bounds.pad(0.08), { maxZoom: graph.nodes.length > 50 ? 15 : 14 });
-  }, [graph, simulation, progress, selectedEdgeId, interventions, optimization, discoveredRecommendations, showNames, monochrome]);
 
+    // Pruned Node Display: only render essential key junctions and selected road endpoints
+    if (showNodes) {
+      const selectedNodeIds = new Set<string>();
+      if (selectedEdge) {
+        selectedNodeIds.add(selectedEdge.source);
+        selectedNodeIds.add(selectedEdge.target);
+      }
+
+      graph.nodes.forEach((node) => {
+        const isOrigin = node.type === 'origin' || node.id.startsWith('O') || node.id === 'A';
+        const isDest = node.type === 'destination' || node.id.startsWith('D') || node.id === 'D';
+        const isSelectedEndpoint = selectedNodeIds.has(node.id);
+
+        // On large networks (Kochi, New York), only render Origin/Destination nodes and selected endpoints
+        if (graph.nodes.length > 25 && !isOrigin && !isDest && !isSelectedEndpoint) {
+          return;
+        }
+
+        const marker = L.circleMarker([node.lat, node.lng], {
+          radius: isSelectedEndpoint ? 8 : (isOrigin || isDest ? 6 : 4),
+          color: isSelectedEndpoint ? '#2563eb' : '#0f172a',
+          weight: isSelectedEndpoint ? 2.5 : 1.5,
+          fillColor: isOrigin ? '#2563eb' : (isDest ? '#059669' : (isSelectedEndpoint ? '#38bdf8' : '#ffffff')),
+          fillOpacity: 1
+        });
+        if (showNames) marker.bindTooltip(node.label || node.id);
+        marker.addTo(layers);
+      });
+    }
+
+    if (bounds.isValid() && (lastGraphId.current !== graph.graph_id || map.getZoom() < 3)) {
+      lastGraphId.current = graph.graph_id;
+      map.fitBounds(bounds.pad(0.08), { maxZoom: graph.nodes.length > 60 ? 15 : 14 });
+    }
+  }, [graph, simulation, baselineSimulation, progress, selectedEdgeId, interventions, optimization, discoveredRecommendations, showNames, showNodes]);
+
+  // Real-Time Animated Flow Particle Simulation
   useEffect(() => {
     const layers = flowLayerGroup.current;
     if (!layers || !graph || !showFlow) return;
+
     layers.clearLayers();
     let frame = 0;
     const particles: Array<{ marker: L.CircleMarker; points: L.LatLngExpression[]; offset: number }> = [];
+
     graph.edges.forEach((edge, edgeIndex) => {
       const metric = simulation?.edge_metrics[edge.id];
       const volume = metric?.volume_vph ?? progress?.edge_volumes[edge.id] ?? 0;
       const points = edgePath(graph, edge);
       if (volume <= 0 || points.length < 2) return;
-      const marker = L.circleMarker(points[0], { radius: 3, color: '#0f172a', weight: 1, fillColor: monochrome ? '#334155' : edgeColor(metric?.vc_ratio ?? 0), fillOpacity: 1 }).addTo(layers);
+
+      const marker = L.circleMarker(points[0], {
+        radius: 3,
+        color: '#0f172a',
+        weight: 1,
+        fillColor: edgeColor(metric?.vc_ratio ?? 0),
+        fillOpacity: 1
+      }).addTo(layers);
+
       particles.push({ marker, points, offset: (edgeIndex * 0.17) % 1 });
     });
+
     const animate = () => {
       frame = window.requestAnimationFrame(animate);
-      const now = (Date.now() % 5000) / 5000;
+      const now = (Date.now() % 4500) / 4500;
       particles.forEach(({ marker, points, offset }) => {
         const position = (now + offset) % 1;
         const segment = Math.min(points.length - 2, Math.floor(position * (points.length - 1)));
         const local = position * (points.length - 1) - segment;
-        const a = L.latLng(points[segment]); const b = L.latLng(points[segment + 1]);
+        const a = L.latLng(points[segment]);
+        const b = L.latLng(points[segment + 1]);
         marker.setLatLng([a.lat + (b.lat - a.lat) * local, a.lng + (b.lng - a.lng) * local]);
       });
     };
+
     animate();
-    return () => { window.cancelAnimationFrame(frame); layers.clearLayers(); };
-  }, [graph, simulation, progress, showFlow, monochrome]);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      layers.clearLayers();
+    };
+  }, [graph, simulation, progress, showFlow]);
 
   const selectedEdge = graph?.edges.find((edge) => edge.id === selectedEdgeId);
   const selectedMetric = selectedEdgeId ? simulation?.edge_metrics[selectedEdgeId] : undefined;
@@ -318,58 +512,430 @@ export default function App() {
     setLoading(true);
     setError(null);
     try {
-      const nextReport = await evaluateIntervention({ base_graph_id: graph.graph_id, demand_multiplier: demandMultiplier, modifications: actions, config });
+      const nextReport = await evaluateIntervention({
+        base_graph_id: graph.graph_id,
+        demand_multiplier: demandMultiplier,
+        modifications: actions,
+        config
+      });
       setInterventions(actions);
       setReport(nextReport);
       setSimulation(nextReport.intervention);
-    } catch (actionError) { setError((actionError as Error).message); }
-    finally { setLoading(false); }
+    } catch (actionError) {
+      setError((actionError as Error).message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleOptimizer = () => {
-    const targetGraphId = analysisScope === 'area' && areaId ? areaId : scenario;
+    const targetGraphId = areaId || selectedScenario;
     stopOptimizer.current?.();
-    setOptimizing(true); setError(null); setOptimization(null); setDiscoveredRecommendations([]); setOptimizationProgress({ current: 0, total: 0 });
-    stopOptimizer.current = startOptimizationStream(targetGraphId, demandMultiplier, config,
+    setOptimizing(true);
+    setError(null);
+    setOptimization(null);
+    setDiscoveredRecommendations([]);
+    setOptimizationProgress({ current: 0, total: 0 });
+
+    stopOptimizer.current = startOptimizationStream(
+      targetGraphId,
+      demandMultiplier,
+      config,
       (event) => setOptimizationProgress({ current: event.current, total: event.total }),
       (recommendation) => setDiscoveredRecommendations((current) => [...current, recommendation]),
-      (result) => { setOptimization(result); setOptimizing(false); },
-      (optimizerError: Error) => { setError(optimizerError.message); setOptimizing(false); });
+      (result) => {
+        setOptimization(result);
+        setOptimizing(false);
+      },
+      (optimizerError: Error) => {
+        setError(optimizerError.message);
+        setOptimizing(false);
+      }
+    );
   };
 
   const applyAllRecommendations = () => {
     const recommendations = optimization?.recommendations || discoveredRecommendations;
-    if (recommendations.length > 0) applyActions(recommendations.map((recommendation) => recommendation.action));
+    if (recommendations.length > 0) {
+      applyActions(recommendations.map((rec) => rec.action));
+    }
   };
 
   const clearAreaSelection = () => {
     areaRect.current?.remove();
     areaRect.current = null;
     setAreaId(null);
-    setAnalysisScope('network');
     setAreaMode(false);
-    if (graph?.graph_id.includes('_area_')) {
-      fetchGraph(scenario).then((data) => { setGraph(data); runLiveSimulation(data.graph_id); });
-    }
+    fetchGraph(selectedScenario).then((data) => {
+      setGraph(data);
+      runLiveSimulation(data.graph_id);
+    });
   };
 
   const widen = () => selectedEdge && applyActions([...interventions, { action: 'WIDEN', edge_id: selectedEdge.id, new_lanes: selectedEdge.lanes + 1, new_capacity_vph: selectedEdge.capacity_vph * 1.5 }]);
   const isSelectedClosed = selectedEdge ? interventions.filter((action) => action.edge_id === selectedEdge.id).slice(-1)[0]?.action === 'CLOSE' : false;
   const close = () => selectedEdge && applyActions(isSelectedClosed ? [...interventions, { action: 'OPEN', edge_id: selectedEdge.id }] : [...interventions, { action: 'CLOSE', edge_id: selectedEdge.id }]);
-  const reset = () => { setInterventions([]); setReport(null); if (graph) runLiveSimulation(graph.graph_id); };
+  const reset = () => {
+    setInterventions([]);
+    setReport(null);
+    if (graph) runLiveSimulation(graph.graph_id);
+  };
   const fitNetwork = () => {
     if (!graph || !mapInstance.current) return;
     const bounds = L.latLngBounds(graph.nodes.map((node) => [node.lat, node.lng] as L.LatLngExpression));
     mapInstance.current.fitBounds(bounds.pad(0.08), { maxZoom: 15 });
   };
 
-  return <div className="app-shell">
-    <header className="app-header"><div className="brand-container"><Layers size={18} /><strong className="brand-title">URBANFLOW</strong><span className="brand-badge">LIVE NETWORK LAB</span></div><div className="header-actions"><select className="select-input mode-select" value={viewMode} onChange={(event) => setViewMode(event.target.value as 'live' | 'graph')}><option value="live">Live map mode</option><option value="graph">Synthetic graph mode</option></select>{viewMode === 'live' ? <select className="select-input scenario-select" value={livePlace} onChange={(event) => handleLivePlaceChange(event.target.value as 'kochi' | 'new_york' | 'custom')}><option value="kochi">Kochi</option><option value="new_york">New York</option><option value="custom">Custom square</option></select> : <select className="select-input scenario-select" value={scenario} onChange={(event) => setScenario(event.target.value)}>{scenarios.map(([id, label]) => <option key={id} value={id}>{label}</option>)}{importedScenario && <option value={importedScenario[0]}>{importedScenario[1]}</option>}</select>}<select className="select-input scope-select" value={analysisScope} onChange={(event) => setAnalysisScope(event.target.value as 'network' | 'area')}><option value="network">Whole network</option><option value="area" disabled={!areaId}>Selected area</option></select><button className="btn" onClick={handleOptimizer} disabled={optimizing || loading}><Zap size={14} />{optimizing ? `Analyzing ${optimizationProgress.total ? `${Math.round((optimizationProgress.current / optimizationProgress.total) * 100)}%` : ''}` : 'Run optimizer'}</button><button className="btn btn-primary" onClick={() => graph && runLiveSimulation(graph.graph_id)} disabled={loading || !graph}><Play size={14} />{loading ? `Simulating${progress ? ` ${progress.iteration}/${progress.max_iterations}` : ''}` : 'Simulate'}</button></div></header>
-    <div className="app-layout"><aside className="sidebar-pane">
-      <section className="panel"><div className="panel-header"><span><Sliders size={14} /> Simulation values</span><span className="muted">{config.algorithm.toUpperCase()}</span></div><div className="panel-body"><label>Demand pressure <strong>{demandMultiplier.toFixed(1)}×</strong></label><input type="range" min="0.5" max="2.5" step="0.1" value={demandMultiplier} onChange={(event) => setDemandMultiplier(Number(event.target.value))} /><small className="muted">Higher pressure increases OD vehicle demand and exposes equilibrium effects such as the Braess paradox.</small>{report && <div className="comparison-box"><div><span>Baseline average</span><b>{report.baseline.summary_metrics.avg_travel_time_mins} min</b></div><div><span>All paths result</span><b>{report.intervention.summary_metrics.avg_travel_time_mins} min</b></div><strong className={report.delta.avg_travel_time_change_pct <= 0 ? 'good' : 'bad'}>{report.delta.avg_travel_time_change_pct <= 0 ? '' : '+'}{report.delta.avg_travel_time_change_pct.toFixed(1)}% vs baseline</strong></div>}<details open={showAdvanced} onToggle={(event) => setShowAdvanced((event.currentTarget as HTMLDetailsElement).open)}><summary>Advanced settings</summary><div className="advanced-fields"><div className="field-grid"><label>BPR alpha<input className="text-input" type="number" step="0.05" value={config.default_alpha} onChange={(event) => setConfig({ ...config, default_alpha: Number(event.target.value) })} /></label><label>BPR beta<input className="text-input" type="number" step="0.5" value={config.default_beta} onChange={(event) => setConfig({ ...config, default_beta: Number(event.target.value) })} /></label></div><label>MSA iterations<input className="text-input" type="number" min="1" max="500" value={config.max_iterations} onChange={(event) => setConfig({ ...config, max_iterations: Number(event.target.value) })} /></label></div></details></div></section>
-      <section className="panel"><div className="panel-header"><span>Selected link</span>{selectedEdge && <code>{selectedEdge.id}</code>}</div><div className="panel-body">{selectedEdge ? <><strong>{selectedEdge.name || selectedEdge.id}</strong><div className="stat-row"><span>Vehicles / hour</span><b>{Math.round(selectedMetric?.volume_vph || progress?.edge_volumes[selectedEdge.id] || 0).toLocaleString()}</b></div><div className="stat-row"><span>Road capacity</span><b>{Math.round(selectedMetric?.capacity_vph || selectedEdge.capacity_vph).toLocaleString()} vph</b></div><div className="stat-row"><span>V/C ratio</span><b>{selectedMetric?.vc_ratio?.toFixed(2) || 'pending'}</b></div><div className="stat-row"><span>Travel time</span><b>{selectedMetric ? `${(selectedMetric.congested_time_sec / 60).toFixed(1)} min` : 'pending'}</b></div><div className="button-row"><button className="btn btn-success" onClick={widen} disabled={loading}><Plus size={13} /> Widen</button><button className="btn btn-danger" onClick={close} disabled={loading}><Ban size={13} /> {isSelectedClosed ? 'Open' : 'Close'}</button></div></> : <p className="muted">Select a road on the map to inspect the live backend metrics.</p>}</div></section>
-      <section className="panel"><div className="panel-header"><span>Network telemetry</span>{interventions.length > 0 && <button className="icon-btn" onClick={reset} title="Reset interventions"><RotateCcw size={14} /></button>}</div><div className="panel-body">{simulation ? <><div className="stat-row"><span>Vehicles in demand</span><b>{Math.round(simulation.summary_metrics.total_vehicles).toLocaleString()}</b></div><div className="stat-row"><span>Average trip</span><b>{simulation.summary_metrics.avg_travel_time_mins} min</b></div><div className="stat-row"><span>Network speed</span><b>{simulation.summary_metrics.avg_network_speed_kmh} km/h</b></div><div className="stat-row"><span>Congested links</span><b>{simulation.summary_metrics.severely_congested_edges_count}</b></div><div className="stat-row"><span>Assignment</span><b>{simulation.summary_metrics.converged ? 'Converged' : 'Max iterations'}</b></div></> : <p className="muted">Waiting for the backend assignment.</p>}{report && <div className="alert-box">{report.delta.summary_text}</div>}{error && <div className="alert-box error">{error}</div>}</div></section>
-      <section className="panel recommendations"><div className="panel-header"><span>Optimizer results</span>{(optimization || discoveredRecommendations.length > 0) && <code>{optimization?.recommendations.length || discoveredRecommendations.length} actions</code>}</div><div className="panel-body">{(optimization?.recommendations || discoveredRecommendations).length > 0 ? <><button className="btn btn-primary" onClick={applyAllRecommendations} disabled={loading || optimizing}>Apply all paths and resimulate</button>{(optimization?.recommendations || discoveredRecommendations).map((recommendation) => <div className="recommendation" key={recommendation.edge_id}><strong>{recommendation.type === 'REMOVE_ROAD' ? 'Close' : 'Widen'} {recommendation.edge_name}</strong><span>Save {recommendation.travel_time_reduction_pct}% average time</span><button className="btn" onClick={() => applyActions([...interventions, recommendation.action])} disabled={loading}>Apply and resimulate</button></div>)}</> : <p className="muted">Run the optimizer to evaluate closures and capacity changes with the backend engine.</p>}</div></section>
-    </aside><main className={`map-pane ${areaMode ? 'area-selecting' : ''}`}><div ref={mapRef} className="map-canvas" /><div className="map-toolbar"><div className="map-actions"><button className="btn" onClick={() => setAreaMode(!areaMode)} title="Toggle between map navigation and area drawing"><Route size={14} /> {areaMode ? 'Pan map' : 'Select area'}</button>{areaId && <button className="btn" onClick={clearAreaSelection} title="Clear selected analysis area">Clear area</button>}<button className="btn" onClick={() => setShowNames(!showNames)} title="Toggle road and node names">Names {showNames ? 'on' : 'off'}</button><button className="btn" onClick={() => setMonochrome(!monochrome)} title="Toggle monochrome network">Mono {monochrome ? 'on' : 'off'}</button><button className="btn" onClick={() => setShowFlow(!showFlow)} title="Toggle moving traffic markers">Flow {showFlow ? 'on' : 'off'}</button><button className="btn" onClick={() => setShowBasemap(!showBasemap)} title="Toggle OpenStreetMap basemap"><Map size={14} /> Map</button><button className="btn" onClick={fitNetwork} title="Fit network to view"><LocateFixed size={14} /></button></div><div className="map-info"><strong>Network view</strong><span>{graph ? `${graph.nodes.length} nodes` : 'Loading nodes'}</span><span>{graph ? `${graph.edges.length} links` : 'Loading links'}</span></div></div><div className="legend"><span><i className="legend-line free" /> Free</span><span><i className="legend-line moderate" /> Moderate</span><span><i className="legend-line severe" /> Bottleneck</span><span><i className="legend-line widened" /> Widened</span></div></main></div>
-  </div>;
+  return (
+    <div className="app-shell">
+      {/* Top Navigation Bar */}
+      <header className="app-header">
+        <div className="brand-container">
+          <Layers size={18} />
+          <strong className="brand-title">URBANFLOW</strong>
+          <span className="brand-badge">TRANSPORT OPTIMIZATION ENGINE</span>
+        </div>
+
+        <div className="header-actions">
+          {/* Mode & Place Dropdown */}
+          <select
+            className="select-input scenario-select"
+            value={areaMode ? 'custom_square' : selectedScenario}
+            onChange={(event) => handleScenarioChange(event.target.value)}
+          >
+            <optgroup label="📍 Live Map Mode">
+              <option value="kochi_central">Kochi, Kerala (Arterial Network)</option>
+              <option value="new_york">New York City (Midtown Manhattan Grid)</option>
+              <option value="custom_square">🔲 Draw Custom Square Area</option>
+            </optgroup>
+            <optgroup label="⚙️ Synthetic Networks">
+              <option value="braess_4node">Classic Braess Paradox (4 Nodes)</option>
+              <option value="expanded_8node">Expanded Multi-Hub (8 Nodes, Latent Braess)</option>
+              <option value="grid_3x3">3x3 Urban Grid Network (9 Nodes)</option>
+              <option value="bottleneck_bridge">Bottleneck Bridge Hub (6 Nodes)</option>
+            </optgroup>
+          </select>
+
+          <button className="btn" onClick={handleOptimizer} disabled={optimizing || loading}>
+            <Zap size={14} />
+            {optimizing
+              ? `Optimizing ${optimizationProgress.total ? `${Math.round((optimizationProgress.current / optimizationProgress.total) * 100)}%` : '...'}`
+              : 'Run Optimizer'}
+          </button>
+
+          <button className="btn btn-primary" onClick={() => graph && runLiveSimulation(graph.graph_id)} disabled={loading || !graph}>
+            <Play size={14} />
+            {loading ? `Simulating${progress ? ` ${progress.iteration}/${progress.max_iterations}` : '...'}` : 'Simulate'}
+          </button>
+        </div>
+      </header>
+
+      <div className="app-layout">
+        {/* Left Sidebar Pane */}
+        <aside className="sidebar-pane">
+          {/* Section 1: Demand & Simulation Parameters */}
+          <section className="panel">
+            <div className="panel-header">
+              <span><Sliders size={14} /> Simulation Parameters</span>
+              <span className="muted">{config.algorithm.toUpperCase()} / BPR</span>
+            </div>
+            <div className="panel-body">
+              <label>
+                Traffic Demand: <strong>{(demandMultiplier * 100).toFixed(0)}%</strong>
+              </label>
+              <input
+                type="range"
+                min="0.1"
+                max="3.0"
+                step="0.1"
+                value={demandMultiplier}
+                onChange={(event) => setDemandMultiplier(Number(event.target.value))}
+              />
+
+              {!isSynthetic && (
+                <>
+                  <label style={{ marginTop: '10px' }}>
+                    Road Density Filter: <strong>{roadDensity < 0.3 ? 'Motorways Only' : roadDensity < 0.6 ? 'Primary Arterials' : roadDensity < 0.85 ? 'Tertiary Included' : 'All Roads'} ({Math.round(roadDensity * 100)}%)</strong>
+                  </label>
+                  <input
+                    type="range"
+                    min="0.0"
+                    max="1.0"
+                    step="0.05"
+                    value={roadDensity}
+                    onChange={(event) => setRoadDensity(Number(event.target.value))}
+                  />
+                </>
+              )}
+
+              {report && (
+                <div className="comparison-box">
+                  <div>
+                    <span>Baseline Travel Time</span>
+                    <b>{report.baseline.summary_metrics.avg_travel_time_mins} min</b>
+                  </div>
+                  <div>
+                    <span>After Intervention</span>
+                    <b>{report.intervention.summary_metrics.avg_travel_time_mins} min</b>
+                  </div>
+                  <strong className={report.delta.avg_travel_time_change_pct <= 0 ? 'good' : 'bad'}>
+                    {report.delta.avg_travel_time_change_pct <= 0 ? '' : '+'}
+                    {report.delta.avg_travel_time_change_pct.toFixed(1)}% vs baseline
+                  </strong>
+                </div>
+              )}
+
+              <details open={showAdvanced} onToggle={(event) => setShowAdvanced((event.currentTarget as HTMLDetailsElement).open)}>
+                <summary>Advanced Cost Parameters</summary>
+                <div className="advanced-fields">
+                  <div className="field-grid">
+                    <label>
+                      Alpha (α)
+                      <input
+                        className="text-input"
+                        type="number"
+                        step="0.05"
+                        value={config.default_alpha}
+                        onChange={(event) => setConfig({ ...config, default_alpha: Number(event.target.value) })}
+                      />
+                    </label>
+                    <label>
+                      Beta (β)
+                      <input
+                        className="text-input"
+                        type="number"
+                        step="0.5"
+                        value={config.default_beta}
+                        onChange={(event) => setConfig({ ...config, default_beta: Number(event.target.value) })}
+                      />
+                    </label>
+                  </div>
+                  <label>
+                    MSA Max Iterations
+                    <input
+                      className="text-input"
+                      type="number"
+                      min="5"
+                      max="100"
+                      value={config.max_iterations}
+                      onChange={(event) => setConfig({ ...config, max_iterations: Number(event.target.value) })}
+                    />
+                  </label>
+                </div>
+              </details>
+            </div>
+          </section>
+
+          {/* Section 2: Selected Road Segment Inspector */}
+          <section className="panel">
+            <div className="panel-header">
+              <span>Selected Corridor Link</span>
+              {selectedEdge && <code>{selectedEdge.id}</code>}
+            </div>
+            <div className="panel-body">
+              {selectedEdge ? (
+                <>
+                  <strong>{selectedEdge.name || selectedEdge.id}</strong>
+                  <div className="stat-row">
+                    <span>Corridor Route</span>
+                    <b>{selectedEdge.source} ➔ {selectedEdge.target}</b>
+                  </div>
+                  <div className="stat-row">
+                    <span>Flow Volume</span>
+                    <b>{Math.round(selectedMetric?.volume_vph || progress?.edge_volumes[selectedEdge.id] || 0).toLocaleString()} vph</b>
+                  </div>
+                  <div className="stat-row">
+                    <span>Capacity / Lanes</span>
+                    <b>{Math.round(selectedMetric?.capacity_vph || selectedEdge.capacity_vph).toLocaleString()} vph ({selectedEdge.lanes} ln)</b>
+                  </div>
+                  <div className="stat-row">
+                    <span>V/C Congestion Ratio</span>
+                    <b>{selectedMetric?.vc_ratio?.toFixed(2) || 'Calculating...'}</b>
+                  </div>
+                  <div className="stat-row">
+                    <span>Equilibrium Speed</span>
+                    <b>{selectedMetric ? `${selectedMetric.avg_speed_kmh} km/h` : 'Calculating...'}</b>
+                  </div>
+                  <div className="button-row">
+                    <button className="btn btn-success" onClick={widen} disabled={loading}>
+                      <Plus size={13} /> Widen (+1 Lane)
+                    </button>
+                    <button className="btn btn-danger" onClick={close} disabled={loading}>
+                      <Ban size={13} /> {isSelectedClosed ? 'Reopen Link' : 'Block / Close Link'}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <p className="muted">Click any road link on the map to inspect live flow telemetry or adjust capacity.</p>
+              )}
+            </div>
+          </section>
+
+          {/* Section 3: Performance Telemetry & Time Saved */}
+          <section className="panel">
+            <div className="panel-header">
+              <span>Network Performance Telemetry</span>
+              {interventions.length > 0 && (
+                <button className="icon-btn" onClick={reset} title="Reset Interventions">
+                  <RotateCcw size={14} />
+                </button>
+              )}
+            </div>
+            <div className="panel-body">
+              {simulation ? (
+                <>
+                  <div className="telemetry-grid">
+                    <div className="telemetry-col">
+                      <div className="telemetry-label">Baseline</div>
+                      <div className="stat-row">
+                        <span>Avg Trip Time</span>
+                        <b>{baselineSimulation?.summary_metrics.avg_travel_time_mins ?? simulation.summary_metrics.avg_travel_time_mins} min</b>
+                      </div>
+                      <div className="stat-row">
+                        <span>Avg Speed</span>
+                        <b>{baselineSimulation?.summary_metrics.avg_network_speed_kmh ?? simulation.summary_metrics.avg_network_speed_kmh} km/h</b>
+                      </div>
+                      <div className="stat-row">
+                        <span>Congested Links</span>
+                        <b>{baselineSimulation?.summary_metrics.severely_congested_edges_count ?? simulation.summary_metrics.severely_congested_edges_count}</b>
+                      </div>
+                    </div>
+
+                    <div className="telemetry-col telemetry-current">
+                      <div className="telemetry-label">Current{interventions.length > 0 ? ' (Intervention)' : ''}</div>
+                      <div className="stat-row">
+                        <span>Avg Trip Time</span>
+                        <b className={baselineSimulation && simulation.summary_metrics.avg_travel_time_mins < baselineSimulation.summary_metrics.avg_travel_time_mins ? 'good' : baselineSimulation && simulation.summary_metrics.avg_travel_time_mins > baselineSimulation.summary_metrics.avg_travel_time_mins ? 'bad' : ''}>
+                          {simulation.summary_metrics.avg_travel_time_mins} min
+                          {baselineSimulation && simulation !== baselineSimulation ? ` (${((simulation.summary_metrics.avg_travel_time_mins - baselineSimulation.summary_metrics.avg_travel_time_mins) / Math.max(baselineSimulation.summary_metrics.avg_travel_time_mins, 0.001) * 100).toFixed(1)}%)` : ''}
+                        </b>
+                      </div>
+                      <div className="stat-row">
+                        <span>Avg Speed</span>
+                        <b className={baselineSimulation && simulation.summary_metrics.avg_network_speed_kmh > baselineSimulation.summary_metrics.avg_network_speed_kmh ? 'good' : ''}>
+                          {simulation.summary_metrics.avg_network_speed_kmh} km/h
+                        </b>
+                      </div>
+                      <div className="stat-row">
+                        <span>Congested Links</span>
+                        <b className={baselineSimulation && simulation.summary_metrics.severely_congested_edges_count < (baselineSimulation.summary_metrics.severely_congested_edges_count ?? 0) ? 'good' : ''}>
+                          {simulation.summary_metrics.severely_congested_edges_count}
+                        </b>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="stat-row" style={{ marginTop: '6px' }}>
+                    <span>Assignment Convergence</span>
+                    <b>{simulation.summary_metrics.converged ? 'Converged' : 'Max iterations'} ({simulation.summary_metrics.iterations_run} iters)</b>
+                  </div>
+                </>
+              ) : (
+                <p className="muted">Running equilibrium assignment...</p>
+              )}
+
+              {report && <div className="alert-box">{report.delta.summary_text}</div>}
+              {error && <div className="alert-box error">{error}</div>}
+            </div>
+          </section>
+
+          {/* Section 4: Multi-Core Optimizer Recommendations */}
+          <section className="panel recommendations">
+            <div className="panel-header">
+              <span>Optimizer Recommendations</span>
+              {(optimization || discoveredRecommendations.length > 0) && (
+                <code>{optimization?.recommendations.length || discoveredRecommendations.length} actions</code>
+              )}
+            </div>
+            <div className="panel-body">
+              {(optimization?.recommendations || discoveredRecommendations).length > 0 ? (
+                <>
+                  <button className="btn btn-primary" onClick={applyAllRecommendations} disabled={loading || optimizing}>
+                    Apply All Interventions & Resimulate
+                  </button>
+                  {(optimization?.recommendations || discoveredRecommendations).map((rec) => (
+                    <div className="recommendation" key={rec.edge_id}>
+                      <strong>{rec.type === 'REMOVE_ROAD' ? '🚫 Close' : '➕ Widen'} {rec.edge_name}</strong>
+                      <span>Save {rec.travel_time_reduction_pct}% average trip latency</span>
+                      <button className="btn" onClick={() => applyActions([...interventions, rec.action])} disabled={loading}>
+                        Apply and Resimulate
+                      </button>
+                    </div>
+                  ))}
+                </>
+              ) : (
+                <p className="muted">Click <strong>Run Optimizer</strong> to scan candidate road closures (Braess paradox links) and lane widenings across all CPU cores.</p>
+              )}
+            </div>
+          </section>
+        </aside>
+
+        {/* Right Map Canvas & Floating Toolbar */}
+        <main className={`map-pane ${areaMode ? 'area-selecting' : ''}`}>
+          {queryStatus && (
+            <div className={`query-status-banner ${queryStatus.type}`}>
+              {queryStatus.type === 'loading' && <div className="query-spinner" />}
+              <span>{queryStatus.message}</span>
+            </div>
+          )}
+
+          <div ref={mapRef} className="map-canvas" />
+
+          {/* Floating Action Controls */}
+          <div className="map-toolbar">
+            <div className="map-actions">
+              <button
+                className={`btn ${areaMode ? 'btn-primary' : ''}`}
+                onClick={() => setAreaMode(!areaMode)}
+                title="Click and drag on map to select and extract a custom bounding box"
+              >
+                <Route size={14} /> {areaMode ? 'Drawing Square Area...' : 'Draw Custom Area'}
+              </button>
+
+              {areaId && (
+                <button className="btn" onClick={clearAreaSelection} title="Clear custom area selection">
+                  Clear Area
+                </button>
+              )}
+
+              <button className="btn" onClick={() => setShowNodes(!showNodes)} title="Toggle node marker visibility">
+                <CircleDot size={14} /> Nodes {showNodes ? 'on' : 'off'}
+              </button>
+
+              <button className="btn" onClick={() => setShowNames(!showNames)} title="Toggle road name tooltips">
+                Names {showNames ? 'on' : 'off'}
+              </button>
+
+              <button className="btn" onClick={() => setShowFlow(!showFlow)} title="Toggle live traffic particle flow">
+                Flow {showFlow ? 'on' : 'off'}
+              </button>
+
+              <button className="btn" onClick={() => setShowBasemap(!showBasemap)} title="Toggle OpenStreetMap basemap">
+                <MapIcon size={14} /> Basemap
+              </button>
+
+              <button className="btn" onClick={fitNetwork} title="Recenter and fit network in view">
+                <LocateFixed size={14} /> Fit
+              </button>
+            </div>
+
+            <div className="map-info">
+              <strong>Network Telemetry</strong>
+              <span>{graph ? `${graph.nodes.length} nodes` : 'Loading...'}</span>
+              <span>{graph ? `${graph.edges.length} links` : 'Loading...'}</span>
+            </div>
+          </div>
+
+          {/* Map Legend */}
+          <div className="legend">
+            <span><i className="legend-line free" /> V/C &lt; 0.75 (Free)</span>
+            <span><i className="legend-line moderate" /> V/C 0.75–0.95 (Moderate)</span>
+            <span><i className="legend-line severe" /> V/C &ge; 0.95 (Bottleneck)</span>
+            <span><i className="legend-line widened" /> Widened</span>
+            <span><i className="legend-line closed" /> Closed</span>
+          </div>
+        </main>
+      </div>
+    </div>
+  );
 }

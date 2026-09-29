@@ -5,7 +5,8 @@ from app.data.synthetic_graphs import (
     get_braess_paradox_network,
     get_expanded_braess_network,
     get_grid_3x3_network,
-    get_bottleneck_bridge_network
+    get_bottleneck_bridge_network,
+    get_new_york_manhattan_network
 )
 
 router = APIRouter(prefix="/api/graphs", tags=["Graphs"])
@@ -29,6 +30,10 @@ _DEMANDS["expanded_8node"] = exp_demand
 g_graph, g_demand = get_grid_3x3_network()
 _GRAPHS["grid_3x3"] = g_graph
 _DEMANDS["grid_3x3"] = g_demand
+
+ny_graph, ny_demand = get_new_york_manhattan_network()
+_GRAPHS["new_york"] = ny_graph
+_DEMANDS["new_york"] = ny_demand
 
 import os
 import json

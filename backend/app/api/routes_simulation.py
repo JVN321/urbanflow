@@ -20,7 +20,7 @@ class SimulationRequestPayload(BaseModel):
     graph_id: Optional[str] = None
     graph: Optional[UrbanFlowGraph] = None
     demand: Optional[TrafficDemand] = None
-    demand_multiplier: float = Field(default=1.0, ge=0.1, le=5.0)
+    demand_multiplier: float = Field(default=1.0, ge=0.1, le=20.0)
     iterations: Optional[int] = Field(default=30)
     config: Optional[SimulationConfig] = None
 
@@ -40,16 +40,18 @@ def run_simulation(
     target_graph = payload.graph if payload else None
     
     if target_graph is None and target_graph_id:
-        if target_graph_id not in _GRAPHS:
+        from app.api.routes_analysis import _AREA_GRAPHS
+        target_graph = _AREA_GRAPHS.get(target_graph_id) or _GRAPHS.get(target_graph_id)
+        if target_graph is None:
             raise HTTPException(status_code=404, detail=f"Graph '{target_graph_id}' not found.")
-        target_graph = _GRAPHS[target_graph_id]
 
     if target_graph is None:
         raise HTTPException(status_code=400, detail="Must provide either 'graph_id' or 'graph' object.")
 
     target_demand = payload.demand if payload else None
-    if target_demand is None and target_graph_id and target_graph_id in _DEMANDS:
-        target_demand = _DEMANDS[target_graph_id]
+    if target_demand is None and target_graph_id:
+        from app.api.routes_analysis import _AREA_DEMANDS
+        target_demand = _AREA_DEMANDS.get(target_graph_id) or _DEMANDS.get(target_graph_id)
     
     if target_demand is None:
         target_demand = TrafficDemand(demand_id="empty_demand", demands=[])
@@ -70,7 +72,7 @@ def run_simulation(
 @router.get("/stream")
 async def stream_simulation(
     graph_id: str,
-    demand_multiplier: float = Query(default=1.0, ge=0.1, le=5.0),
+    demand_multiplier: float = Query(default=1.0, ge=0.1, le=20.0),
     iterations: int = Query(default=30, ge=1, le=500),
     alpha: float = Query(default=0.15, ge=0.0),
     beta: float = Query(default=4.0, ge=0.1),
@@ -79,11 +81,12 @@ async def stream_simulation(
     cost_model: str = Query(default="bpr")
 ):
     """Stream MSA iterations, then emit the canonical final simulation result."""
-    if graph_id not in _GRAPHS:
+    from app.api.routes_analysis import _AREA_GRAPHS, _AREA_DEMANDS
+    graph = _AREA_GRAPHS.get(graph_id) or _GRAPHS.get(graph_id)
+    if not graph:
         raise HTTPException(status_code=404, detail=f"Graph '{graph_id}' not found.")
 
-    graph = _GRAPHS[graph_id]
-    demand = _DEMANDS.get(graph_id) or TrafficDemand(demand_id="empty_demand", demands=[])
+    demand = _AREA_DEMANDS.get(graph_id) or _DEMANDS.get(graph_id) or TrafficDemand(demand_id="empty_demand", demands=[])
     config = SimulationConfig(max_iterations=iterations, default_alpha=alpha, default_beta=beta, convergence_tolerance=convergence_tolerance, algorithm=algorithm, cost_model=cost_model)
     queue: asyncio.Queue = asyncio.Queue()
     loop = asyncio.get_running_loop()

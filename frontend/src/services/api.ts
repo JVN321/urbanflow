@@ -225,6 +225,7 @@ export const analyzeArea = (payload: {
   max_lat: number;
   max_lng: number;
   demand_multiplier: number;
+  road_density?: number;
   config: SimulationConfig;
   fetch_osm?: boolean;
 }): Promise<AreaAnalysisResult> => requestArea(payload);

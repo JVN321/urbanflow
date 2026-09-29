@@ -2,7 +2,18 @@
 
 UrbanFlow is a graph-based traffic simulation and intervention engine designed to model road networks, simulate equilibrium traffic flow using BPR congestion functions, detect bottlenecks, and evaluate candidate infrastructure modifications (widening, closures, additions) to discover phenomena like the **Braess Paradox**.
 
+📖 **Read the Full Optimization & Evaluation Guide**: [`README_OPTIMIZATION_ENGINE.md`](file:///devdrive/github/projects/urbanflow/README_OPTIMIZATION_ENGINE.md)
+
 ---
+
+## 🚀 Running UrbanFlow (Unified Launcher)
+
+Start both the backend FastAPI server and frontend Vite development environment simultaneously:
+```bash
+./run.sh
+```
+- **Frontend Dashboard**: http://localhost:3000
+- **FastAPI Interactive Docs**: http://localhost:8000/docs
 
 ## 👥 Parallel Development Setup (2-Person Split)
 
