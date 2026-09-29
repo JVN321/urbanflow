@@ -2,10 +2,10 @@
 
 ## 1. Team Role Allocation
 
-| Role | Developer | Core Domains | Working Directories |
-|---|---|---|---|
-| **Frontend & Map Specialist** | **Person A** | React+Vite UI, MapLibre/Leaflet rendering, Intervention Designer, Kochi OSMnx extraction pipeline, Synthetic visualizer | `frontend/`, `scripts/`, `data/raw/`, `data/processed/` |
-| **Backend & Algorithms Specialist** | **Person B** | Python Graph Engine, BPR Traffic Assignment (MSA), Bottleneck detection, Intervention evaluator, FastAPI endpoints | `backend/`, `data/synthetic/` |
+| Role                                      | Developer          | Core Domains                                                                                                            | Working Directories                                             |
+| ----------------------------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| **Frontend & Map Specialist**       | **Person A** | React+Vite UI, MapLibre/Leaflet rendering, Intervention Designer, Kochi OSMnx extraction pipeline, Synthetic visualizer | `frontend/`, `scripts/`, `data/raw/`, `data/processed/` |
+| **Backend & Algorithms Specialist** | **Person B** | Python Graph Engine, BPR Traffic Assignment (MSA), Bottleneck detection, Intervention evaluator, FastAPI endpoints      | `backend/`, `data/synthetic/`                               |
 
 ---
 
@@ -40,6 +40,7 @@ W5    │ • Build Before vs After Split/Diff HUD    │ • Run candidate inte
 ## 3. Detailed Weekly Milestone Checklist
 
 ### Week 1 — Foundations, Contracts & Scaffolding
+
 - [ ] **Person A**:
   - Initialize Vite React TypeScript project in `frontend/`.
   - Configure Leaflet map container and dark tiles (CartoDB Dark).
@@ -48,11 +49,13 @@ W5    │ • Build Before vs After Split/Diff HUD    │ • Run candidate inte
   - Setup Python virtual environment and dependencies (`fastapi`, `networkx`, `numpy`, `scipy`, `pydantic`).
   - Create `backend/app/core/graph_model.py` and `backend/app/core/bpr.py`.
   - Implement basic All-or-Nothing (AON) assignment on synthetic 4-node network.
+
 - 🤝 **Sync Checkpoint 1**: Validate that Person A's mock JSON matches Person B's Pydantic response format.
 
 ---
 
 ### Week 2 — Core Simulation & Interactive Visualization
+
 - [ ] **Person A**:
   - Build color-coded road polyline renderer (Green $\rightarrow$ Yellow $\rightarrow$ Red based on $V/C$).
   - Build Braess Paradox demonstration screen: display the 4-node network, toggle shortcut B-C, and observe path travel time updates.
@@ -61,11 +64,13 @@ W5    │ • Build Before vs After Split/Diff HUD    │ • Run candidate inte
   - Implement Method of Successive Averages (MSA) for User Equilibrium (`backend/app/core/assignment.py`).
   - Build `GET /api/benchmarks/braess` endpoint proving the paradox numerically.
   - Create synthetic network generators in `backend/app/data/synthetic_graphs.py`.
+
 - 🤝 **Sync Checkpoint 2**: Test running Person B's backend locally and verify Person A's frontend fetches and renders the live Braess benchmark result.
 
 ---
 
 ### Week 3 — Intervention Studio & Delta Evaluator
+
 - [ ] **Person A**:
   - Build Intervention Toolbar:
     - Click road to open editor modal (Change lane count, capacity, free speed).
@@ -76,12 +81,14 @@ W5    │ • Build Before vs After Split/Diff HUD    │ • Run candidate inte
   - Implement `backend/app/core/intervention.py` (Differential simulation engine).
   - Implement `backend/app/core/bottleneck.py` (Identifies top congested segments & cut-edges).
   - Expose `/api/interventions/evaluate` returning before/after summary and edge deltas.
+
 - 🤝 **Sync Checkpoint 3**: Perform an interactive road widening in the frontend and confirm the backend returns updated travel times and delta metrics.
 
 ---
 
 ### Week 4 — Real-World Kochi Data Integration
-- [ ] **Person A**:
+
+- [x] **Person A**:
   - Write and execute `scripts/extract_kochi_network.py` using OSMnx.
   - Apply IRC 106 capacity heuristics and extract nodes/edges for central Kochi (Edappally, Vyttila, MG Road).
   - Save `data/processed/kochi_graph.json` and `data/processed/kochi_network.geojson`.
@@ -89,11 +96,13 @@ W5    │ • Build Before vs After Split/Diff HUD    │ • Run candidate inte
   - Write `backend/app/data/kochi_loader.py` to parse the processed Kochi graph.
   - Formulate realistic OD demand matrix for Kochi morning peak rush.
   - Benchmark simulation runtime and tune MSA convergence tolerance for 100+ nodes.
+
 - 🤝 **Sync Checkpoint 4**: Render full Kochi geographic road network in the frontend and run baseline traffic simulation on real road geometry.
 
 ---
 
 ### Week 5 — Comparative Analytics, Scenarios & Final Polish
+
 - [ ] **Person A**:
   - Implement side-by-side or split slider before/after comparison view.
   - Add interactive bottleneck ranking list and Braess Paradox alert banner.
@@ -105,11 +114,13 @@ W5    │ • Build Before vs After Split/Diff HUD    │ • Run candidate inte
     3. Synthetic bridge bottleneck failure & widening.
     4. Kochi real-world intervention (e.g. widening Banerji Road or adding a bypass link).
   - Write test suites in `backend/tests/` with 90%+ coverage.
+
 - 🤝 **Final Demo Dry Run**: Both developers present full end-to-end demo covering synthetic validation $\rightarrow$ Kochi real network $\rightarrow$ intervention evaluation.
 
 ---
 
 ## 4. Conflict Avoidance & Git Guidelines
+
 1. **Never edit each other's directories without prior notice**:
    - Person A owns `frontend/` and `scripts/`.
    - Person B owns `backend/`.

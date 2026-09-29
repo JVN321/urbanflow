@@ -6,6 +6,7 @@ __pycache__/
 .Python
 env/
 venv/
+.venv/
 ENV/
 .pytest_cache/
 
@@ -28,5 +29,7 @@ Thumbs.db
 .idea/
 
 # Data Cache
+cache/
 data/raw/*.osm
 data/raw/*.pbf
+
