@@ -1,8 +1,13 @@
 """
-Synthetic Graph and Demand Generators for UrbanFlow validation.
+Synthetic Graph and Demand Generators for UrbanFlow validation and optimization.
+Includes:
+1. Classic 4-Node Braess Network
+2. Expanded 8-Node Multi-Hub Network with Latent Braess Paradox
+3. 3x3 Urban Grid Network
+4. 6-Node Bottleneck Bridge Network
 """
 from typing import Tuple
-from backend.app.core.graph_model import (
+from app.core.graph_model import (
     UrbanFlowGraph,
     GraphNode,
     GraphEdge,
@@ -14,7 +19,7 @@ from backend.app.core.graph_model import (
 
 def get_braess_paradox_network(include_shortcut: bool = False) -> Tuple[UrbanFlowGraph, TrafficDemand]:
     """
-    Creates the classic 4-node Braess Paradox graph.
+    Classic 4-node Braess Paradox Graph.
     Nodes: A (Origin), B, C, D (Destination).
     Demand: 4000 vph from A to D.
     """
@@ -26,43 +31,48 @@ def get_braess_paradox_network(include_shortcut: bool = False) -> Tuple[UrbanFlo
     ]
     
     edges = [
-        # Path 1: A -> B (congestion sensitive: travel time proportional to flow)
+        # Path 1: A -> B: t(v) = 0.6 * v (seconds), which is v / 100 (minutes)
         GraphEdge(
-            id="e_AB", source="A", target="B", name="A to B (Flow Sensitive)",
-            length_m=5000.0, lanes=1, free_speed_kmh=60.0, capacity_vph=1000.0,
-            alpha=0.5, beta=1.0, geometry=[[76.300, 10.000], [76.320, 10.020]]
+            id="e_AB", source="A", target="B", name="A ➔ B (Flow Dependent)",
+            length_m=10000.0, lanes=1, free_speed_kmh=60.0, capacity_vph=1000.0,
+            alpha=0.6, beta=1.0, cost_model="braess_exact",
+            geometry=[[76.300, 10.000], [76.320, 10.020]]
         ),
-        # Path 1: B -> D (constant high travel time)
+        # Path 1: B -> D: fixed 45 mins = 2700 seconds
         GraphEdge(
-            id="e_BD", source="B", target="D", name="B to D (Fixed High Time)",
-            length_m=15000.0, lanes=4, free_speed_kmh=20.0, capacity_vph=10000.0,
-            alpha=0.01, beta=1.0, geometry=[[76.320, 10.020], [76.340, 10.000]]
+            id="e_BD", source="B", target="D", name="B ➔ D (Fixed 45 min)",
+            length_m=27000.0, lanes=4, free_speed_kmh=36.0, capacity_vph=10000.0,
+            alpha=0.0, beta=1.0, cost_model="braess_exact",
+            geometry=[[76.320, 10.020], [76.340, 10.000]]
         ),
-        # Path 2: A -> C (constant high travel time)
+        # Path 2: A -> C: fixed 45 mins = 2700 seconds
         GraphEdge(
-            id="e_AC", source="A", target="C", name="A to C (Fixed High Time)",
-            length_m=15000.0, lanes=4, free_speed_kmh=20.0, capacity_vph=10000.0,
-            alpha=0.01, beta=1.0, geometry=[[76.300, 10.000], [76.320, 9.980]]
+            id="e_AC", source="A", target="C", name="A ➔ C (Fixed 45 min)",
+            length_m=27000.0, lanes=4, free_speed_kmh=36.0, capacity_vph=10000.0,
+            alpha=0.0, beta=1.0, cost_model="braess_exact",
+            geometry=[[76.300, 10.000], [76.320, 9.980]]
         ),
-        # Path 2: C -> D (congestion sensitive)
+        # Path 2: C -> D: t(v) = 0.6 * v (seconds), which is v / 100 (minutes)
         GraphEdge(
-            id="e_CD", source="C", target="D", name="C to D (Flow Sensitive)",
-            length_m=5000.0, lanes=1, free_speed_kmh=60.0, capacity_vph=1000.0,
-            alpha=0.5, beta=1.0, geometry=[[76.320, 9.980], [76.340, 10.000]]
+            id="e_CD", source="C", target="D", name="C ➔ D (Flow Dependent)",
+            length_m=10000.0, lanes=1, free_speed_kmh=60.0, capacity_vph=1000.0,
+            alpha=0.6, beta=1.0, cost_model="braess_exact",
+            geometry=[[76.320, 9.980], [76.340, 10.000]]
         )
     ]
     
     if include_shortcut:
         edges.append(
             GraphEdge(
-                id="e_BC", source="B", target="C", name="B to C (Zero Cost Shortcut)",
-                length_m=100.0, lanes=4, free_speed_kmh=100.0, capacity_vph=10000.0,
-                alpha=0.001, beta=1.0, geometry=[[76.320, 10.020], [76.320, 9.980]]
+                id="e_BC", source="B", target="C", name="B ➔ C (Zero-Cost Shortcut)",
+                length_m=10.0, lanes=4, free_speed_kmh=120.0, capacity_vph=10000.0,
+                alpha=0.0, beta=1.0, cost_model="braess_exact",
+                geometry=[[76.320, 10.020], [76.320, 9.980]]
             )
         )
 
     graph = UrbanFlowGraph(
-        graph_id="braess_4node_shortcut" if include_shortcut else "braess_4node_baseline",
+        graph_id="braess_4node_shortcut" if include_shortcut else "braess_4node",
         name=f"Braess Paradox Network ({'With Shortcut' if include_shortcut else 'Baseline'})",
         nodes=nodes,
         edges=edges,
@@ -78,12 +88,80 @@ def get_braess_paradox_network(include_shortcut: bool = False) -> Tuple[UrbanFlo
     return graph, demand
 
 
+def get_expanded_braess_network() -> Tuple[UrbanFlowGraph, TrafficDemand]:
+    """
+    Expanded 8-node multi-corridor city network containing a latent Braess Paradox road (H3 -> H4).
+    Nodes:
+    - O1, O2 (Origins: Residential North & West)
+    - H1, H2, H3, H4 (Transit Hubs)
+    - D1, D2 (Destinations: Commercial Downtown & Tech Park)
+    """
+    nodes = [
+        GraphNode(id="O1", label="North Suburb (O1)", lat=10.040, lng=76.280, type="origin"),
+        GraphNode(id="O2", label="West Suburb (O2)", lat=10.000, lng=76.270, type="origin"),
+        GraphNode(id="H1", label="North Hub (H1)", lat=10.040, lng=76.310, type="intersection"),
+        GraphNode(id="H2", label="Central Junction (H2)", lat=10.010, lng=76.300, type="intersection"),
+        GraphNode(id="H3", label="Midtown Bypass (H3)", lat=10.030, lng=76.330, type="intersection"),
+        GraphNode(id="H4", label="South Hub (H4)", lat=9.980, lng=76.330, type="intersection"),
+        GraphNode(id="D1", label="Downtown CBD (D1)", lat=10.020, lng=76.360, type="destination"),
+        GraphNode(id="D2", label="Tech Park (D2)", lat=9.970, lng=76.360, type="destination")
+    ]
+
+    edges = [
+        # O1 routes
+        GraphEdge(id="e_O1_H1", source="O1", target="H1", name="North Ring Expressway", length_m=3200, lanes=3, capacity_vph=3200, free_speed_kmh=60),
+        GraphEdge(id="e_O1_H2", source="O1", target="H2", name="West Link", length_m=3500, lanes=2, capacity_vph=1800, free_speed_kmh=45),
+        
+        # O2 routes
+        GraphEdge(id="e_O2_H2", source="O2", target="H2", name="West Arterial", length_m=3000, lanes=2, capacity_vph=2000, free_speed_kmh=50),
+        GraphEdge(id="e_O2_H4", source="O2", target="H4", name="South Canal Road", length_m=6500, lanes=3, capacity_vph=3000, free_speed_kmh=60),
+        
+        # Central connections
+        GraphEdge(id="e_H1_H3", source="H1", target="H3", name="Midtown Connector", length_m=2200, lanes=2, capacity_vph=1500, free_speed_kmh=50),
+        GraphEdge(id="e_H2_H3", source="H2", target="H3", name="Central Eastway", length_m=3400, lanes=2, capacity_vph=1800, free_speed_kmh=45),
+        GraphEdge(id="e_H2_H4", source="H2", target="H4", name="Central Southway", length_m=3200, lanes=2, capacity_vph=1800, free_speed_kmh=45),
+        
+        # Latent Braess Paradox edge: Shortcut H3 -> H4
+        # This shortcut entices drivers away from wide expressways, overloading H4 and downstream exits!
+        GraphEdge(
+            id="e_H3_H4_SHORTCUT", source="H3", target="H4", name="Midtown-South Crosscut (Braess Link)",
+            length_m=600, lanes=2, capacity_vph=3500, free_speed_kmh=70, alpha=0.05, beta=2.0
+        ),
+        
+        # Destination connections
+        GraphEdge(id="e_H3_D1", source="H3", target="D1", name="CBD North Avenue", length_m=3100, lanes=2, capacity_vph=1900, free_speed_kmh=45),
+        GraphEdge(id="e_H4_D1", source="H4", target="D1", name="CBD South Avenue (Bottleneck)", length_m=4200, lanes=1, capacity_vph=1100, free_speed_kmh=35, alpha=0.4, beta=3.5),
+        GraphEdge(id="e_H4_D2", source="H4", target="D2", name="Tech Park Radial", length_m=3300, lanes=2, capacity_vph=2200, free_speed_kmh=55)
+    ]
+
+    graph = UrbanFlowGraph(
+        graph_id="expanded_8node",
+        name="Expanded 8-Node Multi-Hub City Network",
+        nodes=nodes,
+        edges=edges,
+        metadata=GraphMetadata(node_count=len(nodes), edge_count=len(edges))
+    )
+
+    demand = TrafficDemand(
+        demand_id="metro_morning_peak",
+        description="Dual-origin commute into Downtown CBD (D1) and Tech Park (D2)",
+        demands=[
+            OriginDestinationDemand(origin="O1", destination="D1", volume_vph=2200.0),
+            OriginDestinationDemand(origin="O1", destination="D2", volume_vph=1400.0),
+            OriginDestinationDemand(origin="O2", destination="D1", volume_vph=1800.0),
+            OriginDestinationDemand(origin="O2", destination="D2", volume_vph=1200.0)
+        ]
+    )
+
+    return graph, demand
+
+
 def get_grid_3x3_network() -> Tuple[UrbanFlowGraph, TrafficDemand]:
     """Generates a 3x3 urban grid network with 9 nodes and 24 directed edges."""
     nodes = []
     base_lat, base_lng = 10.000, 76.300
     grid_size = 3
-    spacing = 0.015  # approx 1.5 km
+    spacing = 0.015
     
     for r in range(grid_size):
         for c in range(grid_size):
@@ -102,37 +180,33 @@ def get_grid_3x3_network() -> Tuple[UrbanFlowGraph, TrafficDemand]:
     for r in range(grid_size):
         for c in range(grid_size):
             u_id = f"N_{r}_{c}"
-            # Horizontal right
             if c + 1 < grid_size:
                 v_id = f"N_{r}_{c+1}"
                 u_node, v_node = node_map[u_id], node_map[v_id]
                 edges.append(GraphEdge(
-                    id=f"e_{edge_idx}", source=u_id, target=v_id, name=f"St {u_id}->{v_id}",
+                    id=f"e_{edge_idx}", source=u_id, target=v_id, name=f"St {u_id}➔{v_id}",
                     length_m=1500.0, lanes=2, free_speed_kmh=45.0, capacity_vph=1600.0,
                     geometry=[[u_node.lng, u_node.lat], [v_node.lng, v_node.lat]]
                 ))
                 edge_idx += 1
-                # Reverse
                 edges.append(GraphEdge(
-                    id=f"e_{edge_idx}", source=v_id, target=u_id, name=f"St {v_id}->{u_id}",
+                    id=f"e_{edge_idx}", source=v_id, target=u_id, name=f"St {v_id}➔{u_id}",
                     length_m=1500.0, lanes=2, free_speed_kmh=45.0, capacity_vph=1600.0,
                     geometry=[[v_node.lng, v_node.lat], [u_node.lng, u_node.lat]]
                 ))
                 edge_idx += 1
             
-            # Vertical up
             if r + 1 < grid_size:
                 v_id = f"N_{r+1}_{c}"
                 u_node, v_node = node_map[u_id], node_map[v_id]
                 edges.append(GraphEdge(
-                    id=f"e_{edge_idx}", source=u_id, target=v_id, name=f"Ave {u_id}->{v_id}",
+                    id=f"e_{edge_idx}", source=u_id, target=v_id, name=f"Ave {u_id}➔{v_id}",
                     length_m=1500.0, lanes=2, free_speed_kmh=45.0, capacity_vph=1600.0,
                     geometry=[[u_node.lng, u_node.lat], [v_node.lng, v_node.lat]]
                 ))
                 edge_idx += 1
-                # Reverse
                 edges.append(GraphEdge(
-                    id=f"e_{edge_idx}", source=v_id, target=u_id, name=f"Ave {v_id}->{u_id}",
+                    id=f"e_{edge_idx}", source=v_id, target=u_id, name=f"Ave {v_id}➔{u_id}",
                     length_m=1500.0, lanes=2, free_speed_kmh=45.0, capacity_vph=1600.0,
                     geometry=[[v_node.lng, v_node.lat], [u_node.lng, u_node.lat]]
                 ))
@@ -161,26 +235,21 @@ def get_grid_3x3_network() -> Tuple[UrbanFlowGraph, TrafficDemand]:
 def get_bottleneck_bridge_network() -> Tuple[UrbanFlowGraph, TrafficDemand]:
     """Generates two city hubs connected solely by a single critical bridge."""
     nodes = [
-        # West Hub
-        GraphNode(id="W1", label="West Suburb", lat=10.010, lng=76.280),
-        GraphNode(id="W2", label="West Central", lat=10.000, lng=76.290),
-        GraphNode(id="W3", label="West Bridge Approach", lat=10.000, lng=76.305),
-        # East Hub
-        GraphNode(id="E1", label="East Bridge Exit", lat=10.000, lng=76.325),
-        GraphNode(id="E2", label="East Central", lat=10.000, lng=76.340),
-        GraphNode(id="E3", label="East Industrial Zone", lat=9.990, lng=76.350)
+        GraphNode(id="W1", label="West Suburb", lat=10.010, lng=76.280, type="origin"),
+        GraphNode(id="W2", label="West Central", lat=10.000, lng=76.290, type="intersection"),
+        GraphNode(id="W3", label="West Bridge Approach", lat=10.000, lng=76.305, type="intersection"),
+        GraphNode(id="E1", label="East Bridge Exit", lat=10.000, lng=76.325, type="intersection"),
+        GraphNode(id="E2", label="East Central", lat=10.000, lng=76.340, type="intersection"),
+        GraphNode(id="E3", label="East Industrial Zone", lat=9.990, lng=76.350, type="destination")
     ]
     
     edges = [
-        # West cluster
-        GraphEdge(id="e_W1_W2", source="W1", target="W2", length_m=1200, lanes=2, capacity_vph=2000, geometry=[[76.280, 10.010], [76.290, 10.000]]),
-        GraphEdge(id="e_W2_W3", source="W2", target="W3", length_m=1500, lanes=3, capacity_vph=3000, geometry=[[76.290, 10.000], [76.305, 10.000]]),
-        # Critical Bridge (Single bottleneck edge joining East and West)
-        GraphEdge(id="e_BRIDGE_WE", source="W3", target="E1", name="Backwaters Bridge (Bottleneck)", length_m=2000, lanes=1, capacity_vph=1200, geometry=[[76.305, 10.000], [76.325, 10.000]]),
-        GraphEdge(id="e_BRIDGE_EW", source="E1", target="W3", name="Backwaters Bridge (Return)", length_m=2000, lanes=1, capacity_vph=1200, geometry=[[76.325, 10.000], [76.305, 10.000]]),
-        # East cluster
-        GraphEdge(id="e_E1_E2", source="E1", target="E2", length_m=1500, lanes=3, capacity_vph=3000, geometry=[[76.325, 10.000], [76.340, 10.000]]),
-        GraphEdge(id="e_E2_E3", source="E2", target="E3", length_m=1400, lanes=2, capacity_vph=2000, geometry=[[76.340, 10.000], [76.350, 9.990]])
+        GraphEdge(id="e_W1_W2", source="W1", target="W2", length_m=1200, lanes=2, capacity_vph=2000),
+        GraphEdge(id="e_W2_W3", source="W2", target="W3", length_m=1500, lanes=3, capacity_vph=3000),
+        GraphEdge(id="e_BRIDGE_WE", source="W3", target="E1", name="Backwaters Bridge (Bottleneck)", length_m=2000, lanes=1, capacity_vph=1200),
+        GraphEdge(id="e_BRIDGE_EW", source="E1", target="W3", name="Backwaters Bridge (Return)", length_m=2000, lanes=1, capacity_vph=1200),
+        GraphEdge(id="e_E1_E2", source="E1", target="E2", length_m=1500, lanes=3, capacity_vph=3000),
+        GraphEdge(id="e_E2_E3", source="E2", target="E3", length_m=1400, lanes=2, capacity_vph=2000)
     ]
     
     graph = UrbanFlowGraph(

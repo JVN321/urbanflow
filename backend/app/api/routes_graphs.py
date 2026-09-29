@@ -1,8 +1,9 @@
 from fastapi import APIRouter, HTTPException
 from typing import List, Dict, Any
-from backend.app.core.graph_model import UrbanFlowGraph, TrafficDemand
-from backend.app.data.synthetic_graphs import (
+from app.core.graph_model import UrbanFlowGraph, TrafficDemand
+from app.data.synthetic_graphs import (
     get_braess_paradox_network,
+    get_expanded_braess_network,
     get_grid_3x3_network,
     get_bottleneck_bridge_network
 )
@@ -21,13 +22,40 @@ _DEMANDS["braess_4node"] = b_demand
 b_sc_graph, _ = get_braess_paradox_network(include_shortcut=True)
 _GRAPHS["braess_4node_shortcut"] = b_sc_graph
 
+exp_graph, exp_demand = get_expanded_braess_network()
+_GRAPHS["expanded_8node"] = exp_graph
+_DEMANDS["expanded_8node"] = exp_demand
+
 g_graph, g_demand = get_grid_3x3_network()
 _GRAPHS["grid_3x3"] = g_graph
 _DEMANDS["grid_3x3"] = g_demand
 
+import os
+import json
+
 br_graph, br_demand = get_bottleneck_bridge_network()
 _GRAPHS["bottleneck_bridge"] = br_graph
 _DEMANDS["bottleneck_bridge"] = br_demand
+
+# Load real Kochi dataset if present in data/processed/
+kochi_graph_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../data/processed/kochi_arterial_graph.json"))
+kochi_od_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../data/processed/kochi_arterial_od_matrix.json"))
+
+if os.path.exists(kochi_graph_path):
+    try:
+        with open(kochi_graph_path, "r") as f:
+            k_data = json.load(f)
+            k_graph = UrbanFlowGraph(**k_data)
+            _GRAPHS["kochi_central"] = k_graph
+            _GRAPHS["kochi_arterial"] = k_graph
+        if os.path.exists(kochi_od_path):
+            with open(kochi_od_path, "r") as f:
+                k_od_data = json.load(f)
+                k_demand = TrafficDemand(**k_od_data)
+                _DEMANDS["kochi_central"] = k_demand
+                _DEMANDS["kochi_arterial"] = k_demand
+    except Exception as e:
+        print(f"Notice: Could not load Kochi graph dataset: {e}")
 
 
 @router.get("", response_model=List[Dict[str, Any]])

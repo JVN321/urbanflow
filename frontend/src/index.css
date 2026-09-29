@@ -242,3 +242,46 @@ body {
 .pulsing-alert {
   animation: pulse-glow 2s infinite ease-in-out;
 }
+
+/* Animated flow dash */
+@keyframes flow-animation-fast {
+  from { stroke-dashoffset: 40; }
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes flow-animation-slow {
+  from { stroke-dashoffset: 20; }
+  to { stroke-dashoffset: 0; }
+}
+
+.animated-flow-fast {
+  stroke-dasharray: 8, 12;
+  animation: flow-animation-fast 1s linear infinite;
+}
+
+.animated-flow-slow {
+  stroke-dasharray: 6, 8;
+  animation: flow-animation-slow 2.8s linear infinite;
+}
+
+/* Ripple animation for origins */
+@keyframes node-ripple {
+  0% { r: 16px; opacity: 0.8; }
+  100% { r: 32px; opacity: 0; }
+}
+
+.node-ripple-circle {
+  animation: node-ripple 2s cubic-bezier(0.25, 1, 0.5, 1) infinite;
+}
+
+/* Congestion halo pulse */
+@keyframes congestion-pulse {
+  0%, 100% { opacity: 0.2; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(1.15); }
+}
+
+.congestion-halo {
+  animation: congestion-pulse 1.8s ease-in-out infinite;
+  transform-origin: center;
+}
+

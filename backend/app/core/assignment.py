@@ -1,29 +1,36 @@
 """
 Traffic Assignment Algorithms:
-1. All-or-Nothing (AON) using Dijkstra
-2. Method of Successive Averages (MSA) for User Equilibrium
+1. All-or-Nothing (AON) Dijkstra Assignment
+2. Method of Successive Averages (MSA) for Wardrop User Equilibrium
+Includes path flow decomposition and convergence tracking.
 """
 import uuid
 import networkx as nx
-from typing import Dict, List, Tuple
-from backend.app.core.graph_model import (
+from typing import Dict, List, Tuple, Optional
+from app.core.graph_model import (
     UrbanFlowGraph,
     TrafficDemand,
     SimulationResult,
     SimulationSummaryMetrics,
     EdgeSimulationMetric,
-    BottleneckInfo
+    BottleneckInfo,
+    PathFlowInfo,
+    SimulationConfig
 )
-from backend.app.core.bpr import calculate_bpr_travel_time, calculate_congested_speed, classify_congestion_level
+from app.core.bpr import calculate_link_travel_time, calculate_congested_speed, classify_congestion_level
 
 
-def build_networkx_graph(graph: UrbanFlowGraph) -> nx.DiGraph:
+def build_networkx_graph(graph: UrbanFlowGraph, config: Optional[SimulationConfig] = None) -> nx.DiGraph:
     """Converts UrbanFlowGraph schema into a NetworkX DiGraph."""
     G = nx.DiGraph()
     for node in graph.nodes:
         G.add_node(node.id, lat=node.lat, lng=node.lng, label=node.label, type=node.type)
     
     for edge in graph.edges:
+        alpha = edge.alpha if edge.alpha is not None else (config.default_alpha if config else 0.15)
+        beta = edge.beta if edge.beta is not None else (config.default_beta if config else 4.0)
+        cost_model = edge.cost_model if edge.cost_model is not None else (config.cost_model if config else "bpr")
+
         G.add_edge(
             edge.source,
             edge.target,
@@ -33,8 +40,9 @@ def build_networkx_graph(graph: UrbanFlowGraph) -> nx.DiGraph:
             lanes=edge.lanes,
             free_speed_kmh=edge.free_speed_kmh,
             capacity_vph=edge.capacity_vph,
-            alpha=edge.alpha,
-            beta=edge.beta,
+            alpha=alpha,
+            beta=beta,
+            cost_model=cost_model,
             t0=edge.free_flow_time_sec,
             cost=edge.free_flow_time_sec,
             volume=0.0
@@ -46,100 +54,134 @@ def simulate_traffic_msa(
     graph: UrbanFlowGraph,
     demand: TrafficDemand,
     demand_multiplier: float = 1.0,
-    max_iterations: int = 40,
-    tolerance: float = 1e-3
+    config: Optional[SimulationConfig] = None
 ) -> SimulationResult:
     """
     Executes User Equilibrium traffic assignment using the Method of Successive Averages (MSA).
+    Tracks edge flows, path flow distributions, and convergence.
     """
-    G = build_networkx_graph(graph)
+    if config is None:
+        config = SimulationConfig()
+
+    G = build_networkx_graph(graph, config)
     edge_dict = {edge.id: edge for edge in graph.edges}
     
-    # Initialize flows
     edge_flows: Dict[str, float] = {edge.id: 0.0 for edge in graph.edges}
-    
-    # Check for empty demands
-    if not demand.demands:
+    path_history: Dict[str, Dict[str, Any]] = {}
+
+    if not demand.demands or len(graph.edges) == 0:
         return _build_empty_result(graph)
-    
-    # Iterative MSA loop
-    for k in range(1, max_iterations + 1):
-        # Update edge travel times / costs based on current flows
+
+    converged = False
+    iterations_run = 0
+
+    # Iterative MSA Algorithm
+    for k in range(1, config.max_iterations + 1):
+        iterations_run = k
+        
+        # 1. Update link costs based on current flows
         for u, v, data in G.edges(data=True):
             eid = data["edge_id"]
             current_v = edge_flows[eid]
-            t = calculate_bpr_travel_time(
+            t = calculate_link_travel_time(
                 free_flow_time_sec=data["t0"],
                 volume_vph=current_v,
                 capacity_vph=data["capacity_vph"],
                 alpha=data["alpha"],
-                beta=data["beta"]
+                beta=data["beta"],
+                cost_model=data.get("cost_model", "bpr"),
+                length_m=data["length_m"],
+                free_speed_kmh=data["free_speed_kmh"]
             )
             data["cost"] = t
-        
-        # Step: Auxiliary All-or-Nothing (AON) assignment with updated costs
+
+        # 2. Auxiliary All-or-Nothing (AON) Assignment
         aux_flows: Dict[str, float] = {edge.id: 0.0 for edge in graph.edges}
-        
+
         for od in demand.demands:
             od_vol = od.volume_vph * demand_multiplier
             if od_vol <= 0:
                 continue
             try:
                 path = nx.shortest_path(G, source=od.origin, target=od.destination, weight="cost")
-                # Assign flow along path
+                path_str = " ➔ ".join(path)
+                
+                # Calculate path travel time
+                path_edge_ids = []
+                path_time_sec = 0.0
                 for i in range(len(path) - 1):
                     u, v = path[i], path[i + 1]
                     eid = G[u][v]["edge_id"]
+                    path_edge_ids.append(eid)
                     aux_flows[eid] += od_vol
+                    path_time_sec += G[u][v]["cost"]
+
+                # Accumulate path flow info
+                if path_str not in path_history:
+                    path_history[path_str] = {
+                        "nodes": path,
+                        "edges": path_edge_ids,
+                        "volume": 0.0,
+                        "time_mins": round(path_time_sec / 60.0, 2)
+                    }
+                path_history[path_str]["time_mins"] = round(path_time_sec / 60.0, 2)
             except (nx.NetworkXNoPath, nx.NodeNotFound):
-                # Unreachable OD pair in graph
                 continue
-        
-        # Step size for MSA: lambda_k = 1 / k
-        step_size = 1.0 / float(k)
-        
-        # Check convergence
+
+        # 3. Method of Successive Averages Step Size: lambda_k = 1 / (k + 1)
+        step_size = 1.0 / float(k + 1) if config.algorithm == "msa" else 1.0
+
+        # 4. Check Convergence: Relative Gap
         max_flow_diff = 0.0
         total_flow = sum(edge_flows.values())
-        
+
         for eid in edge_flows:
             old_flow = edge_flows[eid]
             new_flow = (1.0 - step_size) * old_flow + step_size * aux_flows[eid]
             max_flow_diff += abs(new_flow - old_flow)
             edge_flows[eid] = new_flow
-        
-        if total_flow > 0 and (max_flow_diff / total_flow) < tolerance and k > 5:
+
+        if total_flow > 0 and (max_flow_diff / max(total_flow, 1.0)) < config.convergence_tolerance and k >= 4:
+            converged = True
             break
 
     # Build final metrics and results
     edge_metrics: Dict[str, EdgeSimulationMetric] = {}
     bottlenecks: List[BottleneckInfo] = []
     total_travel_time_sec = 0.0
-    total_volume_sum = 0.0
     severely_congested_count = 0
-    
+
     for edge in graph.edges:
         vol = edge_flows.get(edge.id, 0.0)
         t0 = edge.free_flow_time_sec
-        congested_t = calculate_bpr_travel_time(t0, vol, edge.capacity_vph, edge.alpha, edge.beta)
+        congested_t = calculate_link_travel_time(
+            free_flow_time_sec=t0,
+            volume_vph=vol,
+            capacity_vph=edge.capacity_vph,
+            alpha=edge.alpha,
+            beta=edge.beta,
+            cost_model=edge.cost_model,
+            length_m=edge.length_m,
+            free_speed_kmh=edge.free_speed_kmh
+        )
         vc = vol / max(edge.capacity_vph, 1.0)
         speed = calculate_congested_speed(edge.length_m, congested_t)
         level = classify_congestion_level(vc)
         is_bottleneck = vc >= 0.95
-        
+
         if is_bottleneck:
             severely_congested_count += 1
             bottlenecks.append(BottleneckInfo(
                 edge_id=edge.id,
-                edge_name=edge.name or f"Edge {edge.source}->{edge.target}",
+                edge_name=edge.name or f"Edge {edge.source}➔{edge.target}",
                 vc_ratio=round(vc, 3),
                 volume_vph=round(vol, 1),
                 capacity_vph=edge.capacity_vph,
                 severity_score=round(min(vc, 2.0) / 2.0, 3),
                 cause="Capacity exceeded during peak demand" if vc > 1.0 else "Approaching saturation",
-                recommendation="Widen road segment or provide alternate bypass corridor"
+                recommendation="Widen road segment or prune adverse shortcuts"
             ))
-        
+
         edge_metrics[edge.id] = EdgeSimulationMetric(
             edge_id=edge.id,
             volume_vph=round(vol, 1),
@@ -151,11 +193,23 @@ def simulate_traffic_msa(
             congestion_level=level,
             is_bottleneck=is_bottleneck
         )
-        
-        total_travel_time_sec += vol * congested_t
-        total_volume_sum += vol
 
-    # Summary calculations
+        total_travel_time_sec += vol * congested_t
+
+    # Path flows reconstruction
+    path_flows_list: List[PathFlowInfo] = []
+    for p_key, p_data in path_history.items():
+        # Estimate path flow from constituent edge minimum flow
+        constituent_flows = [edge_flows.get(e, 0.0) for e in p_data["edges"]]
+        est_vol = min(constituent_flows) if constituent_flows else 0.0
+        if est_vol > 1.0:
+            path_flows_list.append(PathFlowInfo(
+                path_nodes=p_data["nodes"],
+                path_edges=p_data["edges"],
+                assigned_volume_vph=round(est_vol, 1),
+                travel_time_mins=p_data["time_mins"]
+            ))
+
     total_vehicles = sum(d.volume_vph * demand_multiplier for d in demand.demands)
     total_hours = total_travel_time_sec / 3600.0
     avg_travel_mins = (total_travel_time_sec / max(total_vehicles, 1.0)) / 60.0
@@ -167,7 +221,9 @@ def simulate_traffic_msa(
         avg_travel_time_mins=round(avg_travel_mins, 2),
         avg_network_speed_kmh=round(avg_speed, 1),
         severely_congested_edges_count=severely_congested_count,
-        network_efficiency_index=round(max(0.0, 1.0 - (severely_congested_count / max(len(graph.edges), 1))), 3)
+        network_efficiency_index=round(max(0.0, 1.0 - (severely_congested_count / max(len(graph.edges), 1))), 3),
+        iterations_run=iterations_run,
+        converged=converged
     )
 
     return SimulationResult(
@@ -175,7 +231,8 @@ def simulate_traffic_msa(
         graph_id=graph.graph_id,
         summary_metrics=summary,
         edge_metrics=edge_metrics,
-        bottlenecks=sorted(bottlenecks, key=lambda b: b.vc_ratio, reverse=True)
+        bottlenecks=sorted(bottlenecks, key=lambda b: b.vc_ratio, reverse=True),
+        path_flows=path_flows_list
     )
 
 
@@ -203,8 +260,11 @@ def _build_empty_result(graph: UrbanFlowGraph) -> SimulationResult:
             avg_travel_time_mins=0,
             avg_network_speed_kmh=50.0,
             severely_congested_edges_count=0,
-            network_efficiency_index=1.0
+            network_efficiency_index=1.0,
+            iterations_run=0,
+            converged=True
         ),
         edge_metrics=edge_metrics,
-        bottlenecks=[]
+        bottlenecks=[],
+        path_flows=[]
     )

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
-from backend.app.core.graph_model import InterventionPayload, InterventionReport
-from backend.app.core.intervention import evaluate_intervention
-from backend.app.api.routes_graphs import _GRAPHS, _DEMANDS
+from app.core.graph_model import InterventionPayload, InterventionReport
+from app.core.intervention import evaluate_intervention
+from app.api.routes_graphs import _GRAPHS, _DEMANDS
 
 router = APIRouter(prefix="/api/interventions", tags=["Interventions"])
 

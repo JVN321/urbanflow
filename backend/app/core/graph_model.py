@@ -1,4 +1,4 @@
-from typing import List, Dict, Optional, Literal, Tuple, Any
+from typing import List, Dict, Optional, Literal, Any
 from pydantic import BaseModel, Field
 
 
@@ -21,13 +21,14 @@ class GraphEdge(BaseModel):
     capacity_vph: float = 1800.0
     alpha: float = 0.15
     beta: float = 4.0
-    geometry: Optional[List[List[float]]] = None  # [[lng, lat], [lng, lat], ...]
+    cost_model: Literal["bpr", "linear", "braess_exact"] = "bpr"
+    custom_cost_multiplier: float = 1.0
+    geometry: Optional[List[List[float]]] = None
     road_type: Optional[str] = "primary"
     oneway: bool = True
 
     @property
     def free_flow_time_sec(self) -> float:
-        # t0 = length (m) / (speed (km/h) / 3.6)
         speed_mps = (self.free_speed_kmh * 1000.0) / 3600.0
         return self.length_m / max(speed_mps, 0.1)
 
@@ -35,7 +36,7 @@ class GraphEdge(BaseModel):
 class GraphMetadata(BaseModel):
     node_count: int = 0
     edge_count: int = 0
-    bbox: Optional[List[float]] = None  # [min_lng, min_lat, max_lng, max_lat]
+    bbox: Optional[List[float]] = None
 
 
 class UrbanFlowGraph(BaseModel):
@@ -57,6 +58,14 @@ class TrafficDemand(BaseModel):
     demand_id: str
     description: Optional[str] = None
     demands: List[OriginDestinationDemand]
+
+
+class PathFlowInfo(BaseModel):
+    path_nodes: List[str]
+    path_edges: List[str]
+    assigned_volume_vph: float
+    travel_time_mins: float
+    is_equilibrium_path: bool = True
 
 
 class EdgeSimulationMetric(BaseModel):
@@ -83,6 +92,15 @@ class BottleneckInfo(BaseModel):
     recommendation: str
 
 
+class SimulationConfig(BaseModel):
+    algorithm: Literal["msa", "aon"] = "msa"
+    max_iterations: int = 50
+    convergence_tolerance: float = 1e-4
+    default_alpha: float = 0.15
+    default_beta: float = 4.0
+    cost_model: Literal["bpr", "linear", "braess_exact"] = "bpr"
+
+
 class SimulationSummaryMetrics(BaseModel):
     total_vehicles: float
     total_travel_time_hours: float
@@ -90,6 +108,8 @@ class SimulationSummaryMetrics(BaseModel):
     avg_network_speed_kmh: float
     severely_congested_edges_count: int
     network_efficiency_index: float
+    iterations_run: int = 1
+    converged: bool = True
 
 
 class SimulationResult(BaseModel):
@@ -98,6 +118,7 @@ class SimulationResult(BaseModel):
     summary_metrics: SimulationSummaryMetrics
     edge_metrics: Dict[str, EdgeSimulationMetric]
     bottlenecks: List[BottleneckInfo]
+    path_flows: Optional[List[PathFlowInfo]] = []
 
 
 class InterventionAction(BaseModel):
@@ -107,6 +128,7 @@ class InterventionAction(BaseModel):
     new_capacity_vph: Optional[float] = None
     new_speed_kmh: Optional[float] = None
     new_edge: Optional[GraphEdge] = None
+    rationale: Optional[str] = None
 
 
 class InterventionPayload(BaseModel):
@@ -114,12 +136,14 @@ class InterventionPayload(BaseModel):
     demand: Optional[TrafficDemand] = None
     demand_multiplier: float = 1.0
     modifications: List[InterventionAction]
+    config: Optional[SimulationConfig] = None
 
 
 class MetricsDelta(BaseModel):
     total_travel_time_change_pct: float
     avg_travel_time_change_pct: float
     congested_edges_change: int
+    throughput_increase_pct: float = 0.0
     is_braess_paradox: bool
     summary_text: str
 
@@ -131,3 +155,27 @@ class InterventionReport(BaseModel):
     baseline: SimulationResult
     intervention: SimulationResult
     delta: MetricsDelta
+
+
+class OptimizerRecommendation(BaseModel):
+    rank: int
+    type: Literal["REMOVE_ROAD", "WIDEN_ROAD"]
+    edge_id: str
+    edge_name: str
+    action: InterventionAction
+    avg_travel_time_before_mins: float
+    avg_travel_time_after_mins: float
+    travel_time_reduction_pct: float
+    throughput_gain_pct: float
+    is_braess_fix: bool
+    explanation: str
+
+
+class OptimizationResult(BaseModel):
+    graph_id: str
+    baseline_avg_travel_time_mins: float
+    total_candidates_evaluated: int
+    recommendations: List[OptimizerRecommendation]
+    optimal_combined_actions: List[InterventionAction]
+    projected_overall_improvement_pct: float
+    summary: str

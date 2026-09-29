@@ -1,12 +1,12 @@
 from fastapi import APIRouter, HTTPException, Body
 from typing import Optional
-from backend.app.core.graph_model import (
+from app.core.graph_model import (
     UrbanFlowGraph,
     TrafficDemand,
     SimulationResult
 )
-from backend.app.core.assignment import simulate_traffic_msa
-from backend.app.api.routes_graphs import _GRAPHS, _DEMANDS
+from app.core.assignment import simulate_traffic_msa
+from app.api.routes_graphs import _GRAPHS, _DEMANDS
 
 router = APIRouter(prefix="/api/simulate", tags=["Simulation"])
 

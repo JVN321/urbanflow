@@ -3,7 +3,7 @@ Bottleneck, Bridge (Cut-edge), and Graph Topology Analyzer.
 """
 import networkx as nx
 from typing import List, Dict
-from backend.app.core.graph_model import UrbanFlowGraph, BottleneckInfo
+from app.core.graph_model import UrbanFlowGraph, BottleneckInfo
 
 
 def analyze_graph_bridges(graph: UrbanFlowGraph) -> List[str]:

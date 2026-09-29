@@ -4,7 +4,7 @@ Applies modifications (widen, close, add) to a road graph and runs comparative b
 """
 import uuid
 from typing import List
-from backend.app.core.graph_model import (
+from app.core.graph_model import (
     UrbanFlowGraph,
     GraphEdge,
     TrafficDemand,
@@ -12,7 +12,7 @@ from backend.app.core.graph_model import (
     InterventionReport,
     MetricsDelta
 )
-from backend.app.core.assignment import simulate_traffic_msa
+from app.core.assignment import simulate_traffic_msa
 
 
 def apply_modifications(base_graph: UrbanFlowGraph, modifications: List[InterventionAction]) -> UrbanFlowGraph:

@@ -58,27 +58,40 @@ urbanflow/
 
 ## 🚀 Quickstart Guide
 
-### 1. Running the Backend (Person B)
+### 1. Automated Environment Setup (One-Click)
+Run the setup script from the root of the repo:
+```bash
+./setup_env.sh
+```
+*(On Windows: run `setup_env.bat`)*
+
+This will create `backend/venv`, install all Python dependencies, and initialize `frontend/` npm packages.
+
+---
+
+### 2. Running the Backend (Person B)
 ```bash
 cd backend
-python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
-uvicorn backend.app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 8000
 ```
 Interactive Swagger API docs will be live at: `http://localhost:8000/docs`
 
-### 2. Running the Frontend (Person A)
+---
+
+### 3. Running the Frontend (Person A)
 ```bash
 cd frontend
-npm install
 npm run dev
 ```
 Interactive simulation dashboard will be live at: `http://localhost:3000`
 
-*(Note: The frontend includes built-in offline mock fallbacks so Person A can build and test immediately without waiting for the backend).*
+*(Note: The frontend includes built-in offline mock fallbacks so Person A can develop and test immediately without waiting for the backend).*
 
-### 3. Extracting Kochi OSM Road Network (Person A)
+---
+
+### 4. Extracting Kochi OSM Road Network (Person A)
 ```bash
+cd backend && source venv/bin/activate && cd ..
 python3 scripts/extract_kochi_network.py --out-graph data/processed/kochi_graph.json --out-geojson data/processed/kochi_network.geojson
 ```

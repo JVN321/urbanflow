@@ -1,6 +1,6 @@
 from fastapi import APIRouter
-from backend.app.data.synthetic_graphs import get_braess_paradox_network
-from backend.app.core.assignment import simulate_traffic_msa
+from app.data.synthetic_graphs import get_braess_paradox_network
+from app.core.assignment import simulate_traffic_msa
 
 router = APIRouter(prefix="/api/benchmarks", tags=["Benchmarks"])
 
