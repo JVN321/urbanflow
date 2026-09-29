@@ -1,0 +1,76 @@
+{
+  "demand_id": "kochi_morning_peak",
+  "description": "Kochi Urban Corridor Morning Rush Hour (08:30 - 09:30 IST)",
+  "demands": [
+    {
+      "origin": "983",
+      "destination": "2093",
+      "volume_vph": 2200.0
+    },
+    {
+      "origin": "983",
+      "destination": "1293",
+      "volume_vph": 1800.0
+    },
+    {
+      "origin": "983",
+      "destination": "1603",
+      "volume_vph": 2400.0
+    },
+    {
+      "origin": "1603",
+      "destination": "1506",
+      "volume_vph": 2100.0
+    },
+    {
+      "origin": "1506",
+      "destination": "2093",
+      "volume_vph": 1900.0
+    },
+    {
+      "origin": "2715",
+      "destination": "2093",
+      "volume_vph": 2500.0
+    },
+    {
+      "origin": "2715",
+      "destination": "3356",
+      "volume_vph": 2300.0
+    },
+    {
+      "origin": "3356",
+      "destination": "2097",
+      "volume_vph": 1700.0
+    },
+    {
+      "origin": "7421",
+      "destination": "2715",
+      "volume_vph": 2600.0
+    },
+    {
+      "origin": "7421",
+      "destination": "55",
+      "volume_vph": 1500.0
+    },
+    {
+      "origin": "55",
+      "destination": "2097",
+      "volume_vph": 1400.0
+    },
+    {
+      "origin": "2097",
+      "destination": "2093",
+      "volume_vph": 1800.0
+    },
+    {
+      "origin": "2093",
+      "destination": "550",
+      "volume_vph": 1600.0
+    },
+    {
+      "origin": "1603",
+      "destination": "550",
+      "volume_vph": 1500.0
+    }
+  ]
+}
