@@ -55,24 +55,20 @@ def analyze_area(payload: AreaAnalysisRequest):
             result = simulate_traffic_msa(graph, demand, payload.demand_multiplier, payload.config)
             return {"area_id": graph.graph_id, "graph": graph, "result": result, "source": "openstreetmap", "cached": cached}
         except Exception as exc:
-            # If OSM download fails or times out, fallback to cropping from available local network
+            # If OSM download fails or times out, fallback to cropping ONLY if bounding box actually intersects active graph
             base_g, base_d = get_analysis_graph(payload.graph_id)
-            if not base_g:
-                base_g = _GRAPHS.get("kochi_central") or _GRAPHS.get("expanded_8node")
-                base_d = _DEMANDS.get("kochi_central") or _DEMANDS.get("expanded_8node")
             if base_g:
                 node_ids = {node.id for node in base_g.nodes if min_lat <= node.lat <= max_lat and min_lng <= node.lng <= max_lng}
-                if not node_ids:
-                    # In case of drag on synthetic or edge coordinates, take closest nodes
-                    node_ids = {node.id for node in base_g.nodes[:min(len(base_g.nodes), 20)]}
-                edges = [edge for edge in base_g.edges if edge.source in node_ids and edge.target in node_ids]
-                area_id = f"{payload.graph_id}_area_{len(_AREA_GRAPHS) + 1}"
-                area_graph = UrbanFlowGraph(graph_id=area_id, name=f"{base_g.name} | selected area", crs=base_g.crs, nodes=[node for node in base_g.nodes if node.id in node_ids], edges=edges)
-                area_demands = TrafficDemand(demand_id=f"{area_id}_demand", description="OD demand restricted to selected area", demands=[od for od in (base_d.demands if base_d else []) if od.origin in node_ids and od.destination in node_ids])
-                _register_area(area_graph, area_demands)
-                result = simulate_traffic_msa(area_graph, area_demands, payload.demand_multiplier, payload.config)
-                return {"area_id": area_id, "graph": area_graph, "result": result, "source": "local_fallback"}
-            raise HTTPException(status_code=502, detail=f"OSM area download failed: {exc}") from exc
+                if node_ids:
+                    edges = [edge for edge in base_g.edges if edge.source in node_ids and edge.target in node_ids]
+                    if edges:
+                        area_id = f"{payload.graph_id}_area_{len(_AREA_GRAPHS) + 1}"
+                        area_graph = UrbanFlowGraph(graph_id=area_id, name=f"{base_g.name} | selected area", crs=base_g.crs, nodes=[node for node in base_g.nodes if node.id in node_ids], edges=edges)
+                        area_demands = TrafficDemand(demand_id=f"{area_id}_demand", description="OD demand restricted to selected area", demands=[od for od in (base_d.demands if base_d else []) if od.origin in node_ids and od.destination in node_ids])
+                        _register_area(area_graph, area_demands)
+                        result = simulate_traffic_msa(area_graph, area_demands, payload.demand_multiplier, payload.config)
+                        return {"area_id": area_id, "graph": area_graph, "result": result, "source": "local_fallback"}
+            raise HTTPException(status_code=502, detail=f"OpenStreetMap network retrieval failed: {exc}") from exc
 
     graph, demand = get_analysis_graph(payload.graph_id)
     if not graph:

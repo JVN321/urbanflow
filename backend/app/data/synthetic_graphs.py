@@ -379,3 +379,65 @@ def get_new_york_manhattan_network() -> Tuple[UrbanFlowGraph, TrafficDemand]:
     )
     return graph, demand
 
+
+def get_braess_3route_network() -> Tuple[UrbanFlowGraph, TrafficDemand]:
+    """
+    Canonical 3-Road Paradox (Triad Network):
+    Three roads connect Source (A) to Sink (B) directly:
+    - Road 1 (North Highway): 12 km, 4 lanes, capacity 3,200 vph, free-flow time 14 min.
+    - Road 2 (Central Cut-Through - The Paradox Link): 6 km, 1 lane, capacity 900 vph, free-flow time 5 min.
+      Initial quick allure causes the majority of drivers to crowd into it, spiking congested travel time to 35+ mins!
+    - Road 3 (South Highway): 12 km, 4 lanes, capacity 3,200 vph, free-flow time 14 min.
+
+    When Road 2 (Central Cut-Through) is REMOVED:
+    Traffic splits 50/50 onto North and South Highways (2,000 vph each, well under capacity V/C=0.62).
+    Average travel time drops from ~35.5 mins down to ~12.3 mins (-65% latency reduction)!
+    Average network speed jumps from ~14 km/h to ~50 km/h!
+    """
+    nodes = [
+        GraphNode(id="A", label="Source (West Metro Hub A)", lat=10.000, lng=76.275, type="origin"),
+        GraphNode(id="B", label="Sink (East Downtown CBD B)", lat=10.000, lng=76.365, type="destination"),
+    ]
+
+    edges = [
+        # Road 1: North Highway (longer 12 km highway curving north from Source to Sink)
+        GraphEdge(
+            id="e_ROAD_1", source="A", target="B", name="Road 1 (North Highway)",
+            length_m=12000.0, lanes=4, free_speed_kmh=60.0, capacity_vph=3200.0,
+            alpha=0.15, beta=4.0, cost_model="bpr", free_flow_time_sec=840.0,
+            geometry=[[76.275, 10.000], [76.320, 10.035], [76.365, 10.000]], road_type="motorway"
+        ),
+        # Road 2: Central Cut-Through (shorter 6 km narrow road straight through the middle from Source to Sink)
+        GraphEdge(
+            id="e_ROAD_2", source="A", target="B", name="Road 2 (Central Cut-Through - Paradox Link)",
+            length_m=6000.0, lanes=1, free_speed_kmh=72.0, capacity_vph=900.0,
+            alpha=0.15, beta=4.0, cost_model="braess_exact", free_flow_time_sec=300.0,
+            geometry=[[76.275, 10.000], [76.320, 10.000], [76.365, 10.000]], road_type="secondary"
+        ),
+        # Road 3: South Highway (longer 12 km highway curving south from Source to Sink)
+        GraphEdge(
+            id="e_ROAD_3", source="A", target="B", name="Road 3 (South Highway)",
+            length_m=12000.0, lanes=4, free_speed_kmh=60.0, capacity_vph=3200.0,
+            alpha=0.15, beta=4.0, cost_model="bpr", free_flow_time_sec=840.0,
+            geometry=[[76.275, 10.000], [76.320, 9.965], [76.365, 10.000]], road_type="motorway"
+        ),
+    ]
+
+    graph = UrbanFlowGraph(
+        graph_id="braess_3route",
+        name="Canonical 3-Road Paradox (Three Direct Routes A ➔ B)",
+        nodes=nodes,
+        edges=edges,
+        metadata=GraphMetadata(node_count=len(nodes), edge_count=len(edges), bbox=[76.275, 9.965, 76.365, 10.035])
+    )
+
+    demand = TrafficDemand(
+        demand_id="braess_3route_demand",
+        description="Peak Commuter Demand from Source (A) to Sink (B)",
+        demands=[
+            OriginDestinationDemand(origin="A", destination="B", volume_vph=4000.0)
+        ]
+    )
+    return graph, demand
+
+

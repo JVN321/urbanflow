@@ -58,3 +58,16 @@ def test_api_optimizer_recommendation():
     assert len(data["recommendations"]) > 0
     assert data["recommendations"][0]["travel_time_reduction_pct"] > 0
 
+
+def test_braess_3route_paradox_detection():
+    from app.data.synthetic_graphs import get_braess_3route_network
+    g, demand = get_braess_3route_network()
+    opt_result = optimize_traffic_network(g, demand)
+
+    assert len(opt_result.recommendations) > 0
+    top = opt_result.recommendations[0]
+    assert top.type == "REMOVE_ROAD"
+    assert top.edge_id == "e_ROAD_2"
+    assert top.travel_time_reduction_pct > 50.0
+    assert top.is_braess_fix is True
+

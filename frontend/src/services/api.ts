@@ -197,12 +197,24 @@ export const startOptimizationStream = (
   onProgress: (event: OptimizationProgressEvent) => void,
   onDiscovery: (recommendation: any) => void,
   onComplete: (result: OptimizationResult) => void,
-  onError: (error: Error) => void
+  onError: (error: Error) => void,
+  optOptions?: { max_candidates?: number; min_savings_pct?: number }
 ) => {
-  const source = new EventSource(`${API_BASE_URL}/optimizer/stream-optimize?graph_id=${encodeURIComponent(graphId)}&demand_multiplier=${demandMultiplier}&max_iterations=${config.max_iterations}`);
+  const maxIters = config.max_iterations || 30;
+  const maxCands = optOptions?.max_candidates ?? 20;
+  const minSavings = optOptions?.min_savings_pct ?? 0.5;
+  const alpha = config.default_alpha || 0.15;
+  const beta = config.default_beta || 4.0;
+  const tol = config.convergence_tolerance || 1e-3;
+
+  const url = `${API_BASE_URL}/optimizer/stream-optimize?graph_id=${encodeURIComponent(graphId)}&demand_multiplier=${demandMultiplier}&max_iterations=${maxIters}&max_candidates=${maxCands}&min_savings_pct=${minSavings}&convergence_tolerance=${tol}&alpha=${alpha}&beta=${beta}`;
+  const source = new EventSource(url);
   source.onmessage = (event) => {
     try {
       const payload = JSON.parse(event.data);
+      if (payload.type === 'init') {
+        onProgress({ current: 0, total: payload.total || payload.total_candidates || 0, candidate: '', name: '', action_type: 'init' });
+      }
       if (payload.type === 'progress') onProgress(payload);
       if (payload.type === 'discovery') onDiscovery(payload.recommendation);
       if (payload.type === 'complete') { source.close(); onComplete(payload.result); }

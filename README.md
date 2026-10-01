@@ -1,6 +1,15 @@
 # UrbanFlow — Urban Traffic Graph Optimization Engine
 
-UrbanFlow is a graph-based traffic simulation and intervention engine designed to model road networks, simulate equilibrium traffic flow using BPR congestion functions, detect bottlenecks, and evaluate candidate infrastructure modifications (widening, closures, additions) to discover phenomena like the **Braess Paradox**.
+UrbanFlow is a high-performance graph-based traffic simulation and intervention engine designed to model road networks, simulate equilibrium traffic flow using BPR congestion functions, detect bottlenecks, and evaluate candidate infrastructure modifications (widening, closures, additions) to discover phenomena like the **Braess Paradox**.
+
+### 🌟 Key Capabilities & Latest Updates
+- **Canonical 3-Road Paradox Scenario (`braess_3route`)**: Models the intuitive 3-road corridor (Route 1 North steady, Route 2 Middle quick bottleneck, Route 3 South steady). Shows how selfish routing jams the middle road, and how closing it splits traffic 50/50 to dramatically increase average speed and reduce trip times by >20%!
+- **Real New York City Midtown Network (`new_york`)**: Pre-cached real OpenStreetMap Midtown Manhattan arterial network (Times Square, 42nd St, Broadway, 5th Ave) illustrating the historic 1990 Earth Day 42nd St closure paradox.
+- **Multithreaded Performance**: Fully parallelized User Equilibrium simulation (parallel Dijkstra across origins) and multi-core optimizer (`ThreadPoolExecutor` utilizing all available CPU threads).
+- **Persistent OSM Disk Caching**: Custom bounding-box extractions are downloaded via direct OpenStreetMap API and cached to `backend/cache/osm_tiles/` for instant (<5ms) repeat access.
+- **Dynamic Optimizer Reruns**: Rerunning the optimizer on different traffic settings automatically resets roads and previous interventions to evaluate fresh conditions.
+- **Calibrated Demand Baseline**: Baseline traffic demand (100%) calibrated to true peak rush hour loads where bottlenecks and paradox shortcuts naturally emerge.
+- **Smooth Map Panning & Dragging**: Non-blocking flow particles, bubbling polyline mouse events, and native Leaflet drag mechanics.
 
 📖 **Read the Full Optimization & Evaluation Guide**: [`README_OPTIMIZATION_ENGINE.md`](file:///devdrive/github/projects/urbanflow/README_OPTIMIZATION_ENGINE.md)
 

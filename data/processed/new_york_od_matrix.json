@@ -1,0 +1,86 @@
+{
+  "demand_id": "new_york_demand",
+  "description": "Midtown Manhattan Peak Hour Commuter Demand",
+  "demands": [
+    {
+      "origin": "3955360010",
+      "destination": "10261412966",
+      "volume_vph": 1200.0
+    },
+    {
+      "origin": "8122411171",
+      "destination": "561042199",
+      "volume_vph": 1200.0
+    },
+    {
+      "origin": "9749419125",
+      "destination": "10169532531",
+      "volume_vph": 1200.0
+    },
+    {
+      "origin": "10164937728",
+      "destination": "12831235621",
+      "volume_vph": 1200.0
+    },
+    {
+      "origin": "10261412966",
+      "destination": "10125260549",
+      "volume_vph": 1200.0
+    },
+    {
+      "origin": "561042199",
+      "destination": "10268795802",
+      "volume_vph": 1200.0
+    },
+    {
+      "origin": "10169532531",
+      "destination": "3944708037",
+      "volume_vph": 1200.0
+    },
+    {
+      "origin": "12831235621",
+      "destination": "8842216739",
+      "volume_vph": 1200.0
+    },
+    {
+      "origin": "10125260549",
+      "destination": "9856196755",
+      "volume_vph": 1200.0
+    },
+    {
+      "origin": "10268795802",
+      "destination": "10165922716",
+      "volume_vph": 1200.0
+    },
+    {
+      "origin": "3944708037",
+      "destination": "3977886228",
+      "volume_vph": 1200.0
+    },
+    {
+      "origin": "8842216739",
+      "destination": "11299050770",
+      "volume_vph": 1200.0
+    },
+    {
+      "origin": "9856196755",
+      "destination": "1289222431",
+      "volume_vph": 1200.0
+    },
+    {
+      "origin": "10165922716",
+      "destination": "7826843771",
+      "volume_vph": 1200.0
+    },
+    {
+      "origin": "3977886228",
+      "destination": "3997454671",
+      "volume_vph": 1200.0
+    },
+    {
+      "origin": "11299050770",
+      "destination": "4136147002",
+      "volume_vph": 1200.0
+    }
+  ]
+}

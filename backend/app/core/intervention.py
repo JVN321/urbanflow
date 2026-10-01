@@ -97,9 +97,15 @@ def evaluate_intervention(
     )
     
     has_added_or_widened = any(m.action in ("ADD", "WIDEN") for m in modifications)
-    is_braess = (time_change_pct > 0.5) and has_added_or_widened
+    has_removed = any(m.action == "CLOSE" for m in modifications)
+    is_braess = ((time_change_pct > 0.5) and has_added_or_widened) or ((time_change_pct < -0.5) and has_removed)
     
-    if is_braess:
+    if (time_change_pct < -0.5) and has_removed:
+        summary_text = (
+            f"✨ Braess Paradox Resolved! Removing bottleneck shortcut reduced average travel time by "
+            f"{abs(time_change_pct):.1f}% and increased overall traffic flow."
+        )
+    elif is_braess:
         summary_text = (
             f"⚠️ Braess Paradox Detected! Adding infrastructure increased average travel time by "
             f"{abs(time_change_pct):.1f}% due to driver equilibrium route redistribution."

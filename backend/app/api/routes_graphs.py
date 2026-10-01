@@ -3,6 +3,7 @@ from typing import List, Dict, Any
 from app.core.graph_model import UrbanFlowGraph, TrafficDemand
 from app.data.synthetic_graphs import (
     get_braess_paradox_network,
+    get_braess_3route_network,
     get_expanded_braess_network,
     get_grid_3x3_network,
     get_bottleneck_bridge_network,
@@ -16,6 +17,10 @@ _GRAPHS: Dict[str, UrbanFlowGraph] = {}
 _DEMANDS: Dict[str, TrafficDemand] = {}
 
 # Initialize registry
+b3_graph, b3_demand = get_braess_3route_network()
+_GRAPHS["braess_3route"] = b3_graph
+_DEMANDS["braess_3route"] = b3_demand
+
 b_graph, b_demand = get_braess_paradox_network(include_shortcut=True)
 _GRAPHS["braess_4node"] = b_graph
 _DEMANDS["braess_4node"] = b_demand
@@ -51,8 +56,6 @@ if os.path.exists(kochi_graph_path):
         with open(kochi_graph_path, "r") as f:
             k_data = json.load(f)
             k_graph = UrbanFlowGraph(**k_data)
-            # Keep the public registry aliases stable. The dataset's internal
-            # graph_id must not leak into follow-up simulation requests.
             _GRAPHS["kochi_central"] = k_graph.model_copy(update={"graph_id": "kochi_central"})
             _GRAPHS["kochi_arterial"] = k_graph.model_copy(update={"graph_id": "kochi_arterial"})
         if os.path.exists(kochi_od_path):
@@ -63,6 +66,24 @@ if os.path.exists(kochi_graph_path):
                 _DEMANDS["kochi_arterial"] = k_demand
     except Exception as e:
         print(f"Notice: Could not load Kochi graph dataset: {e}")
+
+# Load real NYC Midtown dataset if present in data/processed/
+ny_proc_graph_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../data/processed/new_york_graph.json"))
+ny_proc_od_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../data/processed/new_york_od_matrix.json"))
+
+if os.path.exists(ny_proc_graph_path):
+    try:
+        with open(ny_proc_graph_path, "r") as f:
+            ny_data = json.load(f)
+            ny_loaded_graph = UrbanFlowGraph(**ny_data)
+            _GRAPHS["new_york"] = ny_loaded_graph.model_copy(update={"graph_id": "new_york"})
+        if os.path.exists(ny_proc_od_path):
+            with open(ny_proc_od_path, "r") as f:
+                ny_od_data = json.load(f)
+                ny_loaded_demand = TrafficDemand(**ny_od_data)
+                _DEMANDS["new_york"] = ny_loaded_demand
+    except Exception as e:
+        print(f"Notice: Could not load New York graph dataset: {e}")
 
 
 @router.get("", response_model=List[Dict[str, Any]])
