@@ -122,12 +122,13 @@ class SimulationResult(BaseModel):
 
 
 class InterventionAction(BaseModel):
-    action: Literal["WIDEN", "CLOSE", "OPEN", "ADD", "SPEED_LIMIT"]
+    action: Literal["WIDEN", "CLOSE", "OPEN", "ADD", "SPEED_LIMIT", "ONE_WAY"]
     edge_id: Optional[str] = None
     new_lanes: Optional[int] = None
     new_capacity_vph: Optional[float] = None
     new_speed_kmh: Optional[float] = None
     new_edge: Optional[GraphEdge] = None
+    direction: Optional[str] = None
     rationale: Optional[str] = None
 
 
@@ -159,7 +160,7 @@ class InterventionReport(BaseModel):
 
 class OptimizerRecommendation(BaseModel):
     rank: int
-    type: Literal["REMOVE_ROAD", "WIDEN_ROAD"]
+    type: Literal["REMOVE_ROAD", "WIDEN_ROAD", "MAKE_ONE_WAY"]
     edge_id: str
     edge_name: str
     action: InterventionAction

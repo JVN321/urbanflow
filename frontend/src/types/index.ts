@@ -92,12 +92,13 @@ export interface SimulationResult {
 }
 
 export interface InterventionAction {
-  action: 'WIDEN' | 'CLOSE' | 'OPEN' | 'ADD' | 'SPEED_LIMIT';
+  action: 'WIDEN' | 'CLOSE' | 'OPEN' | 'ADD' | 'SPEED_LIMIT' | 'ONE_WAY';
   edge_id?: string;
   new_lanes?: number;
   new_capacity_vph?: number;
   new_speed_kmh?: number;
   new_edge?: GraphEdge;
+  direction?: string;
   rationale?: string;
 }
 
@@ -128,7 +129,7 @@ export interface InterventionReport {
 
 export interface OptimizerRecommendation {
   rank: number;
-  type: 'REMOVE_ROAD' | 'WIDEN_ROAD';
+  type: 'REMOVE_ROAD' | 'WIDEN_ROAD' | 'MAKE_ONE_WAY';
   edge_id: string;
   edge_name: string;
   action: InterventionAction;

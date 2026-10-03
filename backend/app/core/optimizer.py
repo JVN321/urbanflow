@@ -135,12 +135,12 @@ def select_corridor_candidates(
     seen_edges = set()
 
     for edge in selected_removals:
-        remove_action = InterventionAction(
-            action="CLOSE",
+        oneway_action = InterventionAction(
+            action="ONE_WAY",
             edge_id=edge.id,
-            rationale=f"Evaluate Braess removal of {edge.name or edge.id}"
+            rationale=f"Convert {edge.name or edge.id} to one-way corridor to eliminate Braess bottleneck"
         )
-        tasks.append((remove_action, "REMOVE_ROAD", {"edge": edge}))
+        tasks.append((oneway_action, "MAKE_ONE_WAY", {"edge": edge}))
         seen_edges.add(edge.id)
 
     # 2. Candidate Widenings on Top Bottlenecks (Capacity Expansion)
@@ -231,11 +231,11 @@ def optimize_traffic_network(
                     continue
 
                 if time_diff_pct > 0.2:
-                    is_removal = rec_type == "REMOVE_ROAD"
+                    is_oneway = rec_type in ("MAKE_ONE_WAY", "REMOVE_ROAD")
                     beneficiary_names: List[str] = []
 
-                    # 4. Coupled Widening Analysis for Braess Removals
-                    if is_removal:
+                    # 4. Coupled Widening Analysis for One-Way Conversions
+                    if is_oneway:
                         # Find receiving corridors where flow increased
                         receiving = []
                         for eid, m in sim_after.edge_metrics.items():
@@ -258,16 +258,15 @@ def optimize_traffic_network(
                                 )
                                 coupled_actions_pool.append(coupled_widen)
 
-                        ben_text = f" (diverting flow to parallel corridors {', '.join(beneficiary_names)})" if beneficiary_names else ""
+                        ben_text = f" (diverts to {', '.join(beneficiary_names)})" if beneficiary_names else ""
                         explanation = (
-                            f"Braess Paradox link identified: Removing/closing {edge.name or edge.id} "
-                            f"eliminates a selfish bottleneck shortcut, redistributing traffic across parallel routes{ben_text} "
-                            f"and cutting average trip time by -{time_diff_pct:.1f}%."
+                            f"Change: 1-way conversion (+40% fwd capacity) | "
+                            f"Effect: Resolves Braess bottleneck{ben_text}, cutting travel time by -{time_diff_pct:.1f}%."
                         )
                     else:
                         explanation = (
-                            f"Corridor capacity expansion: Adding +1 lane increases road capacity to "
-                            f"{edge.capacity_vph * 1.5:.0f} vph, decreasing congestion delay by -{time_diff_pct:.1f}%."
+                            f"Change: Add +1 lane ({edge.capacity_vph * 1.5:.0f} vph) | "
+                            f"Effect: Bottleneck relief, cutting travel time by -{time_diff_pct:.1f}%."
                         )
 
                     recommendations.append(OptimizerRecommendation(
@@ -280,7 +279,7 @@ def optimize_traffic_network(
                         avg_travel_time_after_mins=round(after_avg_time, 2),
                         travel_time_reduction_pct=round(time_diff_pct, 2),
                         throughput_gain_pct=round(max(0.0, throughput_gain), 2),
-                        is_braess_fix=is_removal,
+                        is_braess_fix=is_oneway,
                         explanation=explanation
                     ))
         finally:
@@ -298,11 +297,11 @@ def optimize_traffic_network(
     for idx, rec in enumerate(recommendations, start=1):
         rec.rank = idx
 
-    # Optimal combined intervention package (at most 1 closure + top widenings + coupled absorb widenings)
+    # Optimal combined intervention package (at most 1 one-way conversion + top widenings + coupled absorb widenings)
     optimal_actions = []
-    best_closure = next((r.action for r in recommendations if r.type == "REMOVE_ROAD"), None)
-    if best_closure:
-        optimal_actions.append(best_closure)
+    best_oneway = next((r.action for r in recommendations if r.type in ("MAKE_ONE_WAY", "REMOVE_ROAD")), None)
+    if best_oneway:
+        optimal_actions.append(best_oneway)
     for r in recommendations:
         if r.type == "WIDEN_ROAD":
             if not any(a.edge_id == r.action.edge_id for a in optimal_actions):

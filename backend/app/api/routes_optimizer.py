@@ -48,9 +48,13 @@ def _eval_candidate(
     if not edge:
         return None
 
-    is_removal = job_type == "REMOVE_ROAD"
-    if is_removal:
-        action = InterventionAction(action="CLOSE", edge_id=edge.id)
+    is_oneway = job_type in ("MAKE_ONE_WAY", "REMOVE_ROAD")
+    if is_oneway:
+        action = InterventionAction(
+            action="ONE_WAY",
+            edge_id=edge.id,
+            rationale=f"Convert corridor {edge.name or edge.id} into a designated one-way street"
+        )
     else:
         new_lanes = extra.get("new_lanes", edge.lanes + 1)
         new_cap = extra.get("new_capacity", edge.capacity_vph * 1.5)
@@ -76,8 +80,8 @@ def _eval_candidate(
     throughput = ((speed_after - baseline_speed) / max(baseline_speed, 0.1)) * 100.0
 
     beneficiary_names = []
-    # Identify beneficiary parallel corridors that absorb traffic from Braess closures
-    if is_removal and baseline_edge_metrics:
+    # Identify beneficiary parallel corridors that absorb traffic from one-way conversions
+    if is_oneway and baseline_edge_metrics:
         receiving = []
         for eid, m in result.edge_metrics.items():
             prev_vol = baseline_edge_metrics.get(eid).volume_vph if baseline_edge_metrics.get(eid) else 0.0
@@ -91,23 +95,21 @@ def _eval_candidate(
                 beneficiary_names.append(top_rec_edge.name or top_rec_edge.id)
 
     # Custom explanatory rationale
-    ben_text = f" (diverting flow to parallel corridors {', '.join(beneficiary_names)})" if beneficiary_names else ""
-    if is_removal:
+    ben_text = f" (diverts to {', '.join(beneficiary_names)})" if beneficiary_names else ""
+    if is_oneway:
         explanation = (
-            f"Braess Paradox link identified: Removing/closing {edge.name or edge.id} "
-            f"eliminates a selfish bottleneck shortcut, redistributing traffic across parallel routes{ben_text} "
-            f"and cutting average trip time by -{gain:.1f}%."
+            f"Change: 1-way conversion (+40% fwd capacity) | "
+            f"Effect: Resolves Braess bottleneck{ben_text}, cutting travel time by -{gain:.1f}%."
         )
     else:
         explanation = (
-            f"Corridor capacity expansion: Adding +1 lane ({extra.get('new_lanes', edge.lanes + 1)} lanes total) "
-            f"expands throughput to {extra.get('new_capacity', edge.capacity_vph * 1.5):.0f} vph, "
-            f"absorbing diverted traffic and cutting travel time by -{gain:.1f}%."
+            f"Change: Add +1 lane ({extra.get('new_capacity', edge.capacity_vph * 1.5):.0f} vph) | "
+            f"Effect: Bottleneck relief, cutting travel time by -{gain:.1f}%."
         )
 
     return OptimizerRecommendation(
         rank=0,
-        type=job_type,
+        type="MAKE_ONE_WAY" if is_oneway else "WIDEN_ROAD",
         edge_id=edge.id,
         edge_name=edge.name or f"Edge {edge.source}➔{edge.target}",
         action=action,
@@ -115,7 +117,7 @@ def _eval_candidate(
         avg_travel_time_after_mins=round(after, 2),
         travel_time_reduction_pct=round(gain, 2),
         throughput_gain_pct=round(max(0.0, throughput), 2),
-        is_braess_fix=is_removal,
+        is_braess_fix=is_oneway,
         explanation=explanation
     )
 
@@ -212,9 +214,9 @@ def get_recommendations(
         rec.rank = idx
 
     optimal_actions = []
-    best_closure = next((r.action for r in recommendations if r.type == "REMOVE_ROAD"), None)
-    if best_closure:
-        optimal_actions.append(best_closure)
+    best_oneway = next((r.action for r in recommendations if r.type in ("MAKE_ONE_WAY", "REMOVE_ROAD")), None)
+    if best_oneway:
+        optimal_actions.append(best_oneway)
     for r in recommendations:
         if r.type == "WIDEN_ROAD":
             if not any(a.edge_id == r.action.edge_id for a in optimal_actions):
@@ -386,9 +388,9 @@ async def stream_optimization(
                 rec.rank = idx
 
             optimal_actions = []
-            best_closure = next((r.action for r in recommendations if r.type == "REMOVE_ROAD"), None)
-            if best_closure:
-                optimal_actions.append(best_closure)
+            best_oneway = next((r.action for r in recommendations if r.type in ("MAKE_ONE_WAY", "REMOVE_ROAD")), None)
+            if best_oneway:
+                optimal_actions.append(best_oneway)
             for r in recommendations:
                 if r.type == "WIDEN_ROAD":
                     if not any(a.edge_id == r.action.edge_id for a in optimal_actions):

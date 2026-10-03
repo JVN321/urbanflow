@@ -15,7 +15,9 @@ import {
   Tag,
   Save,
   Check,
-  Dices
+  Dices,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import {
   evaluateIntervention,
@@ -32,6 +34,7 @@ import {
   InterventionAction,
   InterventionReport,
   OptimizationResult,
+  OptimizerRecommendation,
   SimulationConfig,
   SimulationResult,
   UrbanFlowGraph
@@ -40,7 +43,8 @@ import 'leaflet/dist/leaflet.css';
 
 const TILE_URL = import.meta.env.VITE_MAP_TILE_URL || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 
-function edgeColor(vc: number, closed = false, widened = false) {
+function edgeColor(vc: number, closed = false, widened = false, oneWay = false) {
+  if (oneWay) return '#7c3aed';
   if (closed) return '#94a3b8';
   if (widened) return '#2563eb';
   if (vc >= 0.95) return '#dc2626';
@@ -617,6 +621,7 @@ export default function App() {
       const baseMetric = baselineSimulation?.edge_metrics[edge.id];
       const volume = metric?.volume_vph ?? progress?.edge_volumes[edge.id] ?? 0;
       const edgeActions = interventions.filter((action) => action.edge_id === edge.id);
+      const oneWay = edgeActions.length > 0 && edgeActions[edgeActions.length - 1].action === 'ONE_WAY';
       const closed = edgeActions.length > 0 && edgeActions[edgeActions.length - 1].action === 'CLOSE';
       const widened = interventions.some((action) => action.action === 'WIDEN' && action.edge_id === edge.id);
       const vc = metric?.vc_ratio ?? volume / Math.max(edge.capacity_vph, 1);
@@ -627,12 +632,17 @@ export default function App() {
       const timeSavedMins = baseTimeMins - currentTimeMins;
 
       // Distinctive discoloration for modified and recommended roads
-      let strokeColor = edgeColor(vc, closed, widened);
+      let strokeColor = edgeColor(vc, closed, widened, oneWay);
       let strokeWidth = Math.max(3.5, Math.min(8.5, (edge.lanes || 1) * 1.8 + 1));
       let strokeDashArray: string | undefined = undefined;
       let strokeOpacity = 0.88;
 
-      if (closed) {
+      if (oneWay) {
+        // Discolor one-way streets to high-visibility vibrant electric purple
+        strokeColor = '#7c3aed';
+        strokeWidth = 7.0;
+        strokeOpacity = 0.95;
+      } else if (closed) {
         // Discolor closed / removed roads to high-contrast slate grey with dashed styling
         strokeColor = '#64748b';
         strokeWidth = 5;
@@ -642,6 +652,12 @@ export default function App() {
         // Discolor widened roads to vibrant electric cyan/blue
         strokeColor = '#0284c7';
         strokeWidth = 8.5;
+        strokeOpacity = 0.95;
+      } else if (recommendation?.type === 'MAKE_ONE_WAY') {
+        // Highlight proposed one-way street conversions in vibrant purple dashed
+        strokeColor = '#8b5cf6';
+        strokeWidth = 6.5;
+        strokeDashArray = '8 4';
         strokeOpacity = 0.95;
       } else if (recommendation?.type === 'REMOVE_ROAD') {
         // Highlight proposed Braess paradox removals in warning hazard amber/yellow dashed
@@ -658,7 +674,7 @@ export default function App() {
 
       if (selectedEdgeId === edge.id) {
         strokeWidth = 9;
-        strokeColor = closed ? '#64748b' : (widened ? '#0284c7' : '#0f172a');
+        strokeColor = oneWay ? '#7c3aed' : (closed ? '#64748b' : (widened ? '#0284c7' : '#0f172a'));
       }
 
       const line = L.polyline(points, {
@@ -671,7 +687,9 @@ export default function App() {
 
       // Tooltip with detailed traffic flow and time saved
       let tooltipContent = `<strong>${edge.name || edge.id}</strong><br>${edge.source} ➔ ${edge.target}<br>Flow: ${Math.round(volume).toLocaleString()} vph | Capacity: ${edge.capacity_vph.toLocaleString()} vph<br>Time: ${currentTimeMins.toFixed(1)} min (V/C: ${vc.toFixed(2)})`;
-      if (closed) {
+      if (oneWay) {
+        tooltipContent += `<br><span style="color: #7c3aed; font-weight: bold;">➡️ CONVERTED TO ONE-WAY CORRIDOR</span>`;
+      } else if (closed) {
         tooltipContent += `<br><span style="color: #64748b; font-weight: bold;">🚫 ROAD BLOCKED / CLOSED</span>`;
       } else if (widened) {
         tooltipContent += `<br><span style="color: #0284c7; font-weight: bold;">➕ ROAD EXPANDED (+1 LANE)</span>`;
@@ -680,7 +698,9 @@ export default function App() {
         tooltipContent += `<br><span style="color: ${timeSavedMins > 0 ? '#059669' : '#dc2626'}; font-weight: bold;">${timeSavedMins > 0 ? `⚡ Time Saved: -${timeSavedMins.toFixed(1)} min` : `⚠️ Delay: +${Math.abs(timeSavedMins).toFixed(1)} min`}</span>`;
       }
       if (recommendation) {
-        tooltipContent += `<br><strong style="color: ${recommendation.type === 'REMOVE_ROAD' ? '#f59e0b' : '#06b6d4'};">⚡ Optimizer: ${recommendation.type === 'REMOVE_ROAD' ? '🚫 Proposed Closure (Braess Fix)' : '➕ Proposed Expansion'} (-${recommendation.travel_time_reduction_pct}% latency)</strong>`;
+        const recTypeLabel = recommendation.type === 'MAKE_ONE_WAY' ? '➡️ Proposed One-Way (Braess Fix)' : recommendation.type === 'REMOVE_ROAD' ? '🚫 Proposed Closure' : '➕ Proposed Expansion';
+        const recColor = recommendation.type === 'MAKE_ONE_WAY' ? '#8b5cf6' : recommendation.type === 'REMOVE_ROAD' ? '#f59e0b' : '#06b6d4';
+        tooltipContent += `<br><strong style="color: ${recColor};">⚡ Optimizer: ${recTypeLabel} (-${recommendation.travel_time_reduction_pct}% latency)</strong>`;
       }
 
       if (showNames) {
@@ -696,15 +716,21 @@ export default function App() {
         let badgeHtml: string | null = null;
         let isRec = false;
 
-        if (closed) {
+        if (oneWay) {
+          badgeHtml = `<div class="on-graph-badge badge-oneway">➡️ ONE-WAY</div>`;
+        } else if (closed) {
           badgeHtml = `<div class="on-graph-badge badge-closed">🚫 CLOSED</div>`;
         } else if (widened) {
           badgeHtml = `<div class="on-graph-badge badge-widened">➕ WIDENED</div>`;
         } else if (recommendation) {
           isRec = true;
-          badgeHtml = recommendation.type === 'REMOVE_ROAD'
-            ? `<div class="on-graph-badge badge-remove" title="Click to apply this road closure">🚫 BLOCK -${recommendation.travel_time_reduction_pct.toFixed(0)}%</div>`
-            : `<div class="on-graph-badge badge-widen" title="Click to apply this widening">➕ WIDEN -${recommendation.travel_time_reduction_pct.toFixed(0)}%</div>`;
+          if (recommendation.type === 'MAKE_ONE_WAY') {
+            badgeHtml = `<div class="on-graph-badge badge-oneway" title="Click to convert to one-way">➡️ ONE-WAY -${recommendation.travel_time_reduction_pct.toFixed(0)}%</div>`;
+          } else if (recommendation.type === 'REMOVE_ROAD') {
+            badgeHtml = `<div class="on-graph-badge badge-remove" title="Click to apply this road closure">🚫 BLOCK -${recommendation.travel_time_reduction_pct.toFixed(0)}%</div>`;
+          } else {
+            badgeHtml = `<div class="on-graph-badge badge-widen" title="Click to apply this widening">➕ WIDEN -${recommendation.travel_time_reduction_pct.toFixed(0)}%</div>`;
+          }
         } else {
           // Regular route travel time & time saved label
           const hasSignificantDelta = Math.abs(timeSavedMins) > 0.05 && baselineSimulation && baselineSimulation !== simulation;
@@ -967,35 +993,36 @@ export default function App() {
     return acc;
   }, []);
 
-  const closeRecommendations = recommendations.filter((r) => r.type === 'REMOVE_ROAD' || r.action.action === 'CLOSE');
+  const onewayRecommendations = recommendations.filter((r) => r.type === 'MAKE_ONE_WAY' || r.type === 'REMOVE_ROAD' || r.action.action === 'ONE_WAY' || r.action.action === 'CLOSE');
   const widenRecommendations = recommendations.filter((r) => r.type === 'WIDEN_ROAD' || r.action.action === 'WIDEN');
   interface ScenarioResult {
     report: InterventionReport;
     actions: InterventionAction[];
   }
-  const [closingsResult, setClosingsResult] = useState<ScenarioResult | null>(null);
+  const [onewayResult, setOnewayResult] = useState<ScenarioResult | null>(null);
   const [wideningsResult, setWideningsResult] = useState<ScenarioResult | null>(null);
   const [combinedResult, setCombinedResult] = useState<ScenarioResult | null>(null);
-  const [activeScenarioMode, setActiveScenarioMode] = useState<'baseline' | 'closings' | 'widenings' | 'combined'>('baseline');
-  const [activeStepRunning, setActiveStepRunning] = useState<'baseline' | 'closings' | 'widenings' | 'combined' | null>(null);
-  const [combinationPriority, setCombinationPriority] = useState<'closing' | 'widening'>('closing');
+  const [activeScenarioMode, setActiveScenarioMode] = useState<'baseline' | 'oneway' | 'widenings' | 'combined'>('baseline');
+  const [activeStepRunning, setActiveStepRunning] = useState<'baseline' | 'oneway' | 'widenings' | 'combined' | null>(null);
+  const [combinationPriority, setCombinationPriority] = useState<'oneway' | 'widening'>('oneway');
+  const [bottomBarCollapsed, setBottomBarCollapsed] = useState(false);
   const [configPresetSaved, setConfigPresetSaved] = useState(false);
 
   // Generates combined operations without conflicting actions on the same road
-  const getCombinedActions = (priority: 'closing' | 'widening' = combinationPriority): InterventionAction[] => {
-    if (priority === 'closing') {
-      const closeEdgeIds = new Set(closeRecommendations.map((r) => r.edge_id));
-      const nonConflictingWiden = widenRecommendations.filter((r) => !closeEdgeIds.has(r.edge_id));
+  const getCombinedActions = (priority: 'oneway' | 'widening' = combinationPriority): InterventionAction[] => {
+    if (priority === 'oneway') {
+      const onewayEdgeIds = new Set(onewayRecommendations.map((r) => r.edge_id));
+      const nonConflictingWiden = widenRecommendations.filter((r) => !onewayEdgeIds.has(r.edge_id));
       return deduplicateActions([
-        ...closeRecommendations.map((r) => r.action),
+        ...onewayRecommendations.map((r) => r.action),
         ...nonConflictingWiden.map((r) => r.action)
       ]);
     } else {
       const widenEdgeIds = new Set(widenRecommendations.map((r) => r.edge_id));
-      const nonConflictingClose = closeRecommendations.filter((r) => !widenEdgeIds.has(r.edge_id));
+      const nonConflictingOneway = onewayRecommendations.filter((r) => !widenEdgeIds.has(r.edge_id));
       return deduplicateActions([
         ...widenRecommendations.map((r) => r.action),
-        ...nonConflictingClose.map((r) => r.action)
+        ...nonConflictingOneway.map((r) => r.action)
       ]);
     }
   };
@@ -1045,10 +1072,10 @@ export default function App() {
     }
   };
 
-  const runClosingsOnlyStep = async () => {
-    if (!graph || closeRecommendations.length === 0) return;
-    const actions = deduplicateActions(closeRecommendations.map((r) => r.action));
-    setActiveStepRunning('closings');
+  const runOnewayOnlyStep = async () => {
+    if (!graph || onewayRecommendations.length === 0) return;
+    const actions = deduplicateActions(onewayRecommendations.map((r) => r.action));
+    setActiveStepRunning('oneway');
     setLoading(true);
     setError(null);
     try {
@@ -1058,11 +1085,11 @@ export default function App() {
         modifications: actions,
         config
       });
-      setClosingsResult({ report: nextReport, actions });
+      setOnewayResult({ report: nextReport, actions });
       setInterventions(actions);
       setReport(nextReport);
       setSimulation(nextReport.intervention);
-      setActiveScenarioMode('closings');
+      setActiveScenarioMode('oneway');
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -1097,7 +1124,7 @@ export default function App() {
     }
   };
 
-  const runCombinedOperations = async (priority: 'closing' | 'widening' = combinationPriority) => {
+  const runCombinedOperations = async (priority: 'oneway' | 'widening' = combinationPriority) => {
     if (!graph || recommendations.length === 0) return;
     setCombinationPriority(priority);
     const actions = getCombinedActions(priority);
@@ -1125,7 +1152,7 @@ export default function App() {
     }
   };
 
-  const viewScenarioOnMap = (mode: 'baseline' | 'closings' | 'widenings' | 'combined') => {
+  const viewScenarioOnMap = (mode: 'baseline' | 'oneway' | 'widenings' | 'combined') => {
     setActiveScenarioMode(mode);
     if (mode === 'baseline') {
       setInterventions([]);
@@ -1135,10 +1162,10 @@ export default function App() {
       } else if (graph) {
         runLiveSimulation(graph.graph_id);
       }
-    } else if (mode === 'closings' && closingsResult) {
-      setInterventions(closingsResult.actions);
-      setReport(closingsResult.report);
-      setSimulation(closingsResult.report.intervention);
+    } else if (mode === 'oneway' && onewayResult) {
+      setInterventions(onewayResult.actions);
+      setReport(onewayResult.report);
+      setSimulation(onewayResult.report.intervention);
     } else if (mode === 'widenings' && wideningsResult) {
       setInterventions(wideningsResult.actions);
       setReport(wideningsResult.report);
@@ -1153,6 +1180,9 @@ export default function App() {
   const formatActionDescription = (action: InterventionAction) => {
     const edge = graph?.edges.find((e) => e.id === action.edge_id);
     const edgeName = edge?.name || action.edge_id;
+    if (action.action === 'ONE_WAY') {
+      return `➡️ One-Way: ${edgeName}`;
+    }
     if (action.action === 'CLOSE') {
       return `🚫 Close ${edgeName}`;
     }
@@ -1160,6 +1190,30 @@ export default function App() {
       return `➕ Widen ${edgeName} (+1 lane)`;
     }
     return `⚡ ${action.action} ${edgeName}`;
+  };
+
+  const getRecChange = (rec: OptimizerRecommendation) => {
+    if (rec.type === 'MAKE_ONE_WAY') return 'Convert to 1-way (flow forward, +40% fwd capacity)';
+    if (rec.type === 'REMOVE_ROAD') return 'Close corridor shortcut to eliminate conflicts';
+    return 'Add +1 travel lane (capacity expanded to 1.5×)';
+  };
+
+  const getRecEffect = (rec: OptimizerRecommendation) => {
+    let divertInfo = '';
+    if (rec.explanation) {
+      const divertMatch = rec.explanation.match(/divert(?:ing flow to parallel corridors|s to)\s+([^),.]+)/i);
+      if (divertMatch && divertMatch[1]) {
+        const corridors = Array.from(new Set(divertMatch[1].split(',').map((s: string) => s.trim()))).join(', ');
+        divertInfo = ` (diverts to ${corridors})`;
+      }
+    }
+    if (rec.type === 'MAKE_ONE_WAY') {
+      return `Eliminates counter-flow Braess conflicts${divertInfo}; preserves access`;
+    }
+    if (rec.type === 'REMOVE_ROAD') {
+      return `Removes Braess shortcut${divertInfo}; redistributes traffic`;
+    }
+    return 'Relieves bottleneck queuing; clears delay & absorbs traffic';
   };
 
   const clearAreaSelection = () => {
@@ -1174,13 +1228,24 @@ export default function App() {
     });
   };
 
-  const widen = () => selectedEdge && applyActions([...interventions, { action: 'WIDEN', edge_id: selectedEdge.id, new_lanes: selectedEdge.lanes + 1, new_capacity_vph: selectedEdge.capacity_vph * 1.5 }]);
+  const isSelectedOneWay = selectedEdge ? interventions.filter((action) => action.edge_id === selectedEdge.id).slice(-1)[0]?.action === 'ONE_WAY' : false;
   const isSelectedClosed = selectedEdge ? interventions.filter((action) => action.edge_id === selectedEdge.id).slice(-1)[0]?.action === 'CLOSE' : false;
-  const close = () => selectedEdge && applyActions(isSelectedClosed ? [...interventions, { action: 'OPEN', edge_id: selectedEdge.id }] : [...interventions, { action: 'CLOSE', edge_id: selectedEdge.id }]);
+
+  const toggleOneWay = () => {
+    if (!selectedEdge) return;
+    if (isSelectedOneWay) {
+      applyActions(interventions.filter((a) => a.edge_id !== selectedEdge.id));
+    } else {
+      applyActions([...interventions.filter((a) => a.edge_id !== selectedEdge.id), { action: 'ONE_WAY', edge_id: selectedEdge.id }]);
+    }
+  };
+
+  const widen = () => selectedEdge && applyActions([...interventions, { action: 'WIDEN', edge_id: selectedEdge.id, new_lanes: selectedEdge.lanes + 1, new_capacity_vph: selectedEdge.capacity_vph * 1.5 }]);
+  const close = () => selectedEdge && applyActions(isSelectedClosed ? interventions.filter((a) => a.edge_id !== selectedEdge.id) : [...interventions.filter((a) => a.edge_id !== selectedEdge.id), { action: 'CLOSE', edge_id: selectedEdge.id }]);
   const reset = () => {
     setInterventions([]);
     setReport(null);
-    setClosingsResult(null);
+    setOnewayResult(null);
     setWideningsResult(null);
     setCombinedResult(null);
     setActiveScenarioMode('baseline');
@@ -1190,6 +1255,19 @@ export default function App() {
     if (!graph || !mapInstance.current) return;
     const bounds = L.latLngBounds(graph.nodes.map((node) => [node.lat, node.lng] as L.LatLngExpression));
     mapInstance.current.fitBounds(bounds.pad(0.08), { maxZoom: 15 });
+  };
+
+  const focusEdgeOnMap = (edgeId?: string) => {
+    if (!edgeId || !graph) return;
+    setSelectedEdgeId(edgeId);
+    const targetEdge = graph.edges.find((e) => e.id === edgeId);
+    if (targetEdge && mapInstance.current) {
+      const pts = edgePath(graph, targetEdge);
+      if (pts.length > 0) {
+        const mid = getEdgeMidpoint(pts);
+        mapInstance.current.setView(mid, Math.max(mapInstance.current.getZoom(), 15));
+      }
+    }
   };
 
   return (
@@ -1421,11 +1499,20 @@ export default function App() {
                   </div>
 
                   <div className="button-row" style={{ marginTop: '6px' }}>
-                    <button className="btn btn-success btn-sm" onClick={widen} disabled={loading}>
-                      <Plus size={12} /> Widen (+1 Lane)
+                    <button
+                      className={`btn btn-sm ${isSelectedOneWay ? 'btn-primary' : ''}`}
+                      style={{ borderLeft: '3px solid #7c3aed' }}
+                      onClick={toggleOneWay}
+                      disabled={loading}
+                      title="Convert this corridor to a one-way street (avoids road closures while eliminating Braess counter-flow)"
+                    >
+                      ➡️ {isSelectedOneWay ? 'Revert One-Way' : 'Make One-Way'}
                     </button>
-                    <button className="btn btn-danger btn-sm" onClick={close} disabled={loading}>
-                      <Ban size={12} /> {isSelectedClosed ? 'Reopen Link' : 'Close Link'}
+                    <button className="btn btn-success btn-sm" onClick={widen} disabled={loading} title="Add 1 additional travel lane">
+                      <Plus size={12} /> Widen
+                    </button>
+                    <button className="btn btn-danger btn-sm" onClick={close} disabled={loading} title="Full road closure (emergency/testing)">
+                      <Ban size={12} /> {isSelectedClosed ? 'Reopen' : 'Close'}
                     </button>
                   </div>
                 </div>
@@ -1438,76 +1525,382 @@ export default function App() {
           </section>
         </aside>
 
-        {/* CENTER: Interactive Map Canvas */}
-        <main className={`map-pane ${areaMode ? 'area-selecting' : ''}`}>
-          {queryStatus && (
-            <div className={`query-status-banner ${queryStatus.type}`}>
-              {queryStatus.type === 'loading' && <div className="query-spinner" />}
-              <span>{queryStatus.message}</span>
-            </div>
-          )}
+        {/* CENTER WORKSPACE: Map Canvas + Docked Bottom Bar */}
+        <div className="center-workspace">
+          <main className={`map-pane ${areaMode ? 'area-selecting' : ''}`}>
+            {queryStatus && (
+              <div className={`query-status-banner ${queryStatus.type}`}>
+                {queryStatus.type === 'loading' && <div className="query-spinner" />}
+                <span>{queryStatus.message}</span>
+              </div>
+            )}
 
-          <div ref={mapRef} className="map-canvas" />
+            <div ref={mapRef} className="map-canvas" />
 
-          {/* Floating Action Controls */}
-          <div className="map-toolbar">
-            <div className="map-actions">
-              <button
-                className={`btn ${areaMode ? 'btn-primary' : ''}`}
-                onClick={() => setAreaMode(!areaMode)}
-                title="Click and drag on map to select and extract a custom bounding box"
-              >
-                <Route size={14} /> {areaMode ? 'Drawing Area...' : 'Draw Area'}
-              </button>
-
-              {areaId && (
-                <button className="btn" onClick={clearAreaSelection} title="Clear custom area selection">
-                  Clear Area
+            {/* Floating Action Controls */}
+            <div className="map-toolbar">
+              <div className="map-actions">
+                <button
+                  className={`btn ${areaMode ? 'btn-primary' : ''}`}
+                  onClick={() => setAreaMode(!areaMode)}
+                  title="Click and drag on map to select and extract a custom bounding box"
+                >
+                  <Route size={14} /> {areaMode ? 'Drawing Area...' : 'Draw Area'}
                 </button>
-              )}
 
-              <button className="btn" onClick={() => setShowLabels(!showLabels)} title="Toggle route travel times & time saved labels">
-                <Tag size={14} /> Labels {showLabels ? 'on' : 'off'}
-              </button>
+                {areaId && (
+                  <button className="btn" onClick={clearAreaSelection} title="Clear custom area selection">
+                    Clear Area
+                  </button>
+                )}
 
-              <button className="btn" onClick={() => setShowNodes(!showNodes)} title="Toggle node marker visibility">
-                <CircleDot size={14} /> Nodes {showNodes ? 'on' : 'off'}
-              </button>
+                <button className="btn" onClick={() => setShowLabels(!showLabels)} title="Toggle route travel times & time saved labels">
+                  <Tag size={14} /> Labels {showLabels ? 'on' : 'off'}
+                </button>
 
-              <button className="btn" onClick={() => setShowNames(!showNames)} title="Toggle road name tooltips">
-                Names {showNames ? 'on' : 'off'}
-              </button>
+                <button className="btn" onClick={() => setShowNodes(!showNodes)} title="Toggle node marker visibility">
+                  <CircleDot size={14} /> Nodes {showNodes ? 'on' : 'off'}
+                </button>
 
-              <button className="btn" onClick={() => setShowFlow(!showFlow)} title="Toggle live traffic particle flow">
-                Flow {showFlow ? 'on' : 'off'}
-              </button>
+                <button className="btn" onClick={() => setShowNames(!showNames)} title="Toggle road name tooltips">
+                  Names {showNames ? 'on' : 'off'}
+                </button>
 
-              <button className="btn" onClick={() => setShowBasemap(!showBasemap)} title="Toggle OpenStreetMap basemap">
-                <MapIcon size={14} /> Basemap {showBasemap ? 'on' : 'off'}
-              </button>
+                <button className="btn" onClick={() => setShowFlow(!showFlow)} title="Toggle live traffic particle flow">
+                  Flow {showFlow ? 'on' : 'off'}
+                </button>
 
-              <button className="btn" onClick={fitNetwork} title="Recenter and fit network in view">
-                <LocateFixed size={14} /> Recenter Fit
-              </button>
+                <button className="btn" onClick={() => setShowBasemap(!showBasemap)} title="Toggle OpenStreetMap basemap">
+                  <MapIcon size={14} /> Basemap {showBasemap ? 'on' : 'off'}
+                </button>
+
+                <button className="btn" onClick={fitNetwork} title="Recenter and fit network in view">
+                  <LocateFixed size={14} /> Recenter Fit
+                </button>
+              </div>
+
+              <div className="map-info">
+                <strong>Network Info</strong>
+                <span>{graph ? `${graph.nodes.length}n · ${graph.edges.length}e` : 'Loading...'}</span>
+              </div>
             </div>
 
-            <div className="map-info">
-              <strong>Network Info</strong>
-              <span>{graph ? `${graph.nodes.length}n · ${graph.edges.length}e` : 'Loading...'}</span>
+            {/* Map Legend */}
+            <div className="legend">
+              <span><i className="legend-line free" /> V/C &lt; 0.75 (Free)</span>
+              <span><i className="legend-line moderate" /> V/C 0.75–0.95 (Moderate)</span>
+              <span><i className="legend-line severe" /> V/C &ge; 0.95 (Bottleneck)</span>
+              <span><i className="legend-line oneway" /> One-Way</span>
+              <span><i className="legend-line widened" /> Widened</span>
+              <span><i className="legend-line closed" /> Closed</span>
+              <span><i className="legend-line proposed-remove" /> Candidate One-Way</span>
+              <span><i className="legend-line proposed-widen" /> Candidate Widening</span>
+            </div>
+          </main>
+
+          {/* DOCKED BOTTOM BAR: Side-by-Side 3 Scenario Applications */}
+          <div className={`bottom-bar-pane ${bottomBarCollapsed ? 'collapsed' : ''}`}>
+            {/* Header */}
+            <div className="bottom-bar-header">
+              <div className="bottom-bar-title-group">
+                <Sliders size={14} />
+                <span>Interventions</span>
+              </div>
+
+              <div className="bottom-bar-actions">
+                <button
+                  className={`btn btn-sm ${activeStepRunning === 'oneway' ? 'btn-primary' : ''}`}
+                  onClick={runOnewayOnlyStep}
+                  disabled={loading || optimizing || onewayRecommendations.length === 0}
+                  style={{ borderLeft: '3px solid #7c3aed' }}
+                  title="Simulate candidate one-way conversions (preserves frontage access while eliminating Braess paradox)"
+                >
+                  ➡️ One-Ways ({onewayRecommendations.length})
+                </button>
+
+                <button
+                  className={`btn btn-sm ${activeStepRunning === 'widenings' ? 'btn-primary' : ''}`}
+                  onClick={runWideningsOnlyStep}
+                  disabled={loading || optimizing || widenRecommendations.length === 0}
+                  style={{ borderLeft: '3px solid #10b981' }}
+                  title="Simulate candidate road widenings"
+                >
+                  ➕ Widenings ({widenRecommendations.length})
+                </button>
+
+                <div className="bottom-bar-priority-toggle" title="Combination Priority">
+                  <button
+                    className={`priority-pill-btn ${combinationPriority === 'oneway' ? 'active oneway' : ''}`}
+                    onClick={() => setCombinationPriority('oneway')}
+                  >
+                    ➡️ One-Way 1st
+                  </button>
+                  <button
+                    className={`priority-pill-btn ${combinationPriority === 'widening' ? 'active widening' : ''}`}
+                    onClick={() => setCombinationPriority('widening')}
+                  >
+                    ➕ Widening 1st
+                  </button>
+                </div>
+
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={() => runCombinedOperations(combinationPriority)}
+                  disabled={loading || optimizing || getCombinedActions(combinationPriority).length === 0}
+                  title="Simulate all combined interventions across CPU cores instantly"
+                >
+                  ⚡ Combined ({getCombinedActions(combinationPriority).length})
+                </button>
+
+                <button
+                  className="icon-btn"
+                  onClick={() => setBottomBarCollapsed(!bottomBarCollapsed)}
+                  title={bottomBarCollapsed ? 'Expand Bottom Bar' : 'Collapse Bottom Bar'}
+                  style={{ marginLeft: '4px' }}
+                >
+                  {bottomBarCollapsed ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                </button>
+              </div>
+            </div>
+
+            {/* Simulating Indicator */}
+            {activeStepRunning && activeStepRunning !== 'baseline' && (
+              <div className="bottom-bar-alert-banner" style={{ background: '#f0f9ff', color: '#0369a1', borderColor: '#bae6fd' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div className="query-spinner" style={{ width: '12px', height: '12px' }} />
+                  <span>
+                    Simulating multi-core {activeStepRunning === 'oneway' ? 'One-Way Conversions' : activeStepRunning === 'widenings' ? 'Widenings Only' : `Combined Operations (${combinationPriority === 'oneway' ? 'One-Way Priority' : 'Widening Priority'})`}...
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Error & Delta Alerts */}
+            {error && (
+              <div className="bottom-bar-alert-banner" style={{ background: '#fef2f2', color: '#dc2626', borderColor: '#fecaca' }}>
+                <span>⚠️ {error}</span>
+                <button className="icon-btn" onClick={() => setError(null)} style={{ padding: '0 4px', fontSize: '0.7rem' }}>✕</button>
+              </div>
+            )}
+            {report && (
+              <div className="bottom-bar-alert-banner">
+                <span>✨ {report.delta.summary_text}</span>
+              </div>
+            )}
+
+            {/* Body: 3 Side-by-Side Columns */}
+            <div className="bottom-bar-body">
+              {/* Column 1: One-Ways Only */}
+              <div className={`bottom-bar-column ${activeScenarioMode === 'oneway' ? 'active-map-view' : ''}`}>
+                <div className="bottom-bar-column-header">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ fontSize: '0.65rem', padding: '2px 5px', borderRadius: '4px', background: '#ede9fe', color: '#6d28d9', fontWeight: 700 }}>
+                      ONE-WAY
+                    </span>
+                    <strong style={{ fontSize: '0.78rem', color: '#6d28d9' }}>1. One-Way Conversions</strong>
+                  </div>
+                  {onewayResult && (
+                    <button
+                      className={`btn btn-sm ${activeScenarioMode === 'oneway' ? 'btn-primary' : ''}`}
+                      onClick={() => viewScenarioOnMap('oneway')}
+                      style={{ fontSize: '0.7rem', padding: '2px 8px' }}
+                    >
+                      {activeScenarioMode === 'oneway' ? '✓ On Map' : 'View on Map'}
+                    </button>
+                  )}
+                </div>
+
+                {onewayResult ? (
+                  <>
+                    <div className="comparison-box" style={{ margin: '4px 0' }}>
+                      <div>
+                        <span>Travel Time</span>
+                        <b>{onewayResult.report.intervention.summary_metrics.avg_travel_time_mins.toFixed(1)}m</b>
+                      </div>
+                      <div>
+                        <span>Avg Speed</span>
+                        <b>{onewayResult.report.intervention.summary_metrics.avg_network_speed_kmh.toFixed(1)} km/h</b>
+                      </div>
+                      <strong className={onewayResult.report.delta.avg_travel_time_change_pct <= 0 ? 'good' : 'bad'}>
+                        {onewayResult.report.delta.avg_travel_time_change_pct <= 0 ? '' : '+'}
+                        {onewayResult.report.delta.avg_travel_time_change_pct.toFixed(1)}% vs base
+                      </strong>
+                    </div>
+                    <div className="bottom-bar-changes-list">
+                      <span style={{ fontSize: '0.68rem', color: '#475569', fontWeight: 600 }}>Applied ({onewayResult.actions.length}):</span>
+                      {onewayResult.actions.map((act, idx) => {
+                        const isSelected = selectedEdgeId === act.edge_id;
+                        return (
+                          <div
+                            key={idx}
+                            className={`scenario-change-item ${isSelected ? 'selected' : ''}`}
+                            onClick={() => focusEdgeOnMap(act.edge_id)}
+                            title="Click to view and inspect this corridor on map"
+                          >
+                            <span>{formatActionDescription(act)}</span>
+                            <span className="inspect-arrow">{isSelected ? '✓ On Map' : 'Inspect ➔'}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ padding: '8px 4px', textAlign: 'center', color: '#64748b', fontSize: '0.72rem' }}>
+                    <p style={{ margin: '0 0 6px 0' }}>Convert Braess paradox shortcuts into one-ways while preserving frontage access.</p>
+                    <button
+                      className="btn btn-sm"
+                      onClick={runOnewayOnlyStep}
+                      disabled={loading || optimizing || onewayRecommendations.length === 0}
+                      style={{ fontSize: '0.72rem' }}
+                    >
+                      ➡️ Simulate One-Ways ({onewayRecommendations.length})
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Column 2: Widenings Only */}
+              <div className={`bottom-bar-column ${activeScenarioMode === 'widenings' ? 'active-map-view' : ''}`}>
+                <div className="bottom-bar-column-header">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ fontSize: '0.65rem', padding: '2px 5px', borderRadius: '4px', background: '#d1fae5', color: '#047857', fontWeight: 700 }}>
+                      WIDENING
+                    </span>
+                    <strong style={{ fontSize: '0.78rem', color: '#047857' }}>2. Corridor Widenings</strong>
+                  </div>
+                  {wideningsResult && (
+                    <button
+                      className={`btn btn-sm ${activeScenarioMode === 'widenings' ? 'btn-primary' : ''}`}
+                      onClick={() => viewScenarioOnMap('widenings')}
+                      style={{ fontSize: '0.7rem', padding: '2px 8px' }}
+                    >
+                      {activeScenarioMode === 'widenings' ? '✓ On Map' : 'View on Map'}
+                    </button>
+                  )}
+                </div>
+
+                {wideningsResult ? (
+                  <>
+                    <div className="comparison-box" style={{ margin: '4px 0' }}>
+                      <div>
+                        <span>Travel Time</span>
+                        <b>{wideningsResult.report.intervention.summary_metrics.avg_travel_time_mins.toFixed(1)}m</b>
+                      </div>
+                      <div>
+                        <span>Avg Speed</span>
+                        <b>{wideningsResult.report.intervention.summary_metrics.avg_network_speed_kmh.toFixed(1)} km/h</b>
+                      </div>
+                      <strong className={wideningsResult.report.delta.avg_travel_time_change_pct <= 0 ? 'good' : 'bad'}>
+                        {wideningsResult.report.delta.avg_travel_time_change_pct <= 0 ? '' : '+'}
+                        {wideningsResult.report.delta.avg_travel_time_change_pct.toFixed(1)}% vs base
+                      </strong>
+                    </div>
+                    <div className="bottom-bar-changes-list">
+                      <span style={{ fontSize: '0.68rem', color: '#475569', fontWeight: 600 }}>Applied ({wideningsResult.actions.length}):</span>
+                      {wideningsResult.actions.map((act, idx) => {
+                        const isSelected = selectedEdgeId === act.edge_id;
+                        return (
+                          <div
+                            key={idx}
+                            className={`scenario-change-item ${isSelected ? 'selected' : ''}`}
+                            onClick={() => focusEdgeOnMap(act.edge_id)}
+                            title="Click to view and inspect this corridor on map"
+                          >
+                            <span>{formatActionDescription(act)}</span>
+                            <span className="inspect-arrow">{isSelected ? '✓ On Map' : 'Inspect ➔'}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ padding: '8px 4px', textAlign: 'center', color: '#64748b', fontSize: '0.72rem' }}>
+                    <p style={{ margin: '0 0 6px 0' }}>Expand bottleneck arterial links by adding +1 lane and expanding capacity.</p>
+                    <button
+                      className="btn btn-sm"
+                      onClick={runWideningsOnlyStep}
+                      disabled={loading || optimizing || widenRecommendations.length === 0}
+                      style={{ fontSize: '0.72rem' }}
+                    >
+                      ➕ Simulate Widenings ({widenRecommendations.length})
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Column 3: Combined Operations */}
+              <div className={`bottom-bar-column ${activeScenarioMode === 'combined' ? 'active-map-view' : ''}`}>
+                <div className="bottom-bar-column-header">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ fontSize: '0.65rem', padding: '2px 5px', borderRadius: '4px', background: '#e0f2fe', color: '#0369a1', fontWeight: 700 }}>
+                      COMBINED
+                    </span>
+                    <strong style={{ fontSize: '0.78rem', color: '#0369a1' }}>
+                      3. Combined ({combinationPriority === 'oneway' ? 'One-Way Priority' : 'Widening Priority'})
+                    </strong>
+                  </div>
+                  {combinedResult && (
+                    <button
+                      className={`btn btn-sm ${activeScenarioMode === 'combined' ? 'btn-primary' : ''}`}
+                      onClick={() => viewScenarioOnMap('combined')}
+                      style={{ fontSize: '0.7rem', padding: '2px 8px' }}
+                    >
+                      {activeScenarioMode === 'combined' ? '✓ On Map' : 'View on Map'}
+                    </button>
+                  )}
+                </div>
+
+                {combinedResult ? (
+                  <>
+                    <div className="comparison-box" style={{ margin: '4px 0' }}>
+                      <div>
+                        <span>Travel Time</span>
+                        <b>{combinedResult.report.intervention.summary_metrics.avg_travel_time_mins.toFixed(1)}m</b>
+                      </div>
+                      <div>
+                        <span>Avg Speed</span>
+                        <b>{combinedResult.report.intervention.summary_metrics.avg_network_speed_kmh.toFixed(1)} km/h</b>
+                      </div>
+                      <strong className={combinedResult.report.delta.avg_travel_time_change_pct <= 0 ? 'good' : 'bad'}>
+                        {combinedResult.report.delta.avg_travel_time_change_pct <= 0 ? '' : '+'}
+                        {combinedResult.report.delta.avg_travel_time_change_pct.toFixed(1)}% vs base
+                      </strong>
+                    </div>
+                    <div className="bottom-bar-changes-list">
+                      <span style={{ fontSize: '0.68rem', color: '#475569', fontWeight: 600 }}>Applied ({combinedResult.actions.length}):</span>
+                      {combinedResult.actions.map((act, idx) => {
+                        const isSelected = selectedEdgeId === act.edge_id;
+                        return (
+                          <div
+                            key={idx}
+                            className={`scenario-change-item ${isSelected ? 'selected' : ''}`}
+                            onClick={() => focusEdgeOnMap(act.edge_id)}
+                            title="Click to view and inspect this corridor on map"
+                          >
+                            <span>{formatActionDescription(act)}</span>
+                            <span className="inspect-arrow">{isSelected ? '✓ On Map' : 'Inspect ➔'}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ padding: '8px 4px', textAlign: 'center', color: '#64748b', fontSize: '0.72rem' }}>
+                    <p style={{ margin: '0 0 6px 0' }}>Evaluate combined one-way conversions and corridor widenings together.</p>
+                    <button
+                      className="btn btn-primary btn-sm"
+                      onClick={() => runCombinedOperations(combinationPriority)}
+                      disabled={loading || optimizing || getCombinedActions(combinationPriority).length === 0}
+                      style={{ fontSize: '0.72rem' }}
+                    >
+                      ⚡ Simulate Combined ({getCombinedActions(combinationPriority).length})
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-
-          {/* Map Legend */}
-          <div className="legend">
-            <span><i className="legend-line free" /> V/C &lt; 0.75 (Free)</span>
-            <span><i className="legend-line moderate" /> V/C 0.75–0.95 (Moderate)</span>
-            <span><i className="legend-line severe" /> V/C &ge; 0.95 (Bottleneck)</span>
-            <span><i className="legend-line widened" /> Widened</span>
-            <span><i className="legend-line closed" /> Closed</span>
-            <span><i className="legend-line proposed-remove" /> Proposed Closure</span>
-            <span><i className="legend-line proposed-widen" /> Proposed Widening</span>
-          </div>
-        </main>
+        </div>
 
         {/* RIGHT SIDEBAR: Step-by-Step Workflow & Results */}
         <aside className="sidebar-right-pane">
@@ -1632,41 +2025,39 @@ export default function App() {
 
               {/* Optimizer Discovered Recommendations Summary */}
               {recommendations.length > 0 ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '180px', overflowY: 'auto' }}>
+                <div className="recommendations-scroll-container">
                   {recommendations.map((rec) => {
                     const isSelected = selectedEdgeId === rec.edge_id;
                     return (
                       <div
                         className={`recommendation-card ${isSelected ? 'selected-rec' : ''}`}
                         key={rec.edge_id}
-                        onClick={() => {
-                          setSelectedEdgeId(rec.edge_id);
-                          const targetEdge = graph?.edges.find((e) => e.id === rec.edge_id);
-                          if (targetEdge && mapInstance.current) {
-                            const pts = edgePath(graph!, targetEdge);
-                            if (pts.length > 0) {
-                              const mid = getEdgeMidpoint(pts);
-                              mapInstance.current.setView(mid, Math.max(mapInstance.current.getZoom(), 15));
-                            }
-                          }
-                        }}
+                        onClick={() => focusEdgeOnMap(rec.edge_id)}
                         title="Click to view and inspect this corridor on map"
                       >
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <strong style={{ fontSize: '0.78rem', color: isSelected ? '#0284c7' : 'inherit' }}>
-                            {rec.type === 'REMOVE_ROAD' ? '🚫 Close' : '➕ Widen'} {rec.edge_name}
+                          <strong style={{ fontSize: '0.8rem', color: isSelected ? '#0284c7' : 'inherit' }}>
+                            {rec.type === 'MAKE_ONE_WAY' ? '➡️ One-Way' : rec.type === 'REMOVE_ROAD' ? '🚫 Close' : '➕ Widen'} {rec.edge_name}
                           </strong>
-                          <span style={{ color: '#059669', fontWeight: 700 }}>-{rec.travel_time_reduction_pct}%</span>
+                          <span style={{ color: '#059669', fontWeight: 700, fontSize: '0.8rem' }}>-{rec.travel_time_reduction_pct}%</span>
                         </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '2px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '3px' }}>
                           <span style={{ color: '#64748b', fontSize: '0.72rem' }}>
                             {rec.avg_travel_time_before_mins}m ➔ {rec.avg_travel_time_after_mins}m
                           </span>
-                          {isSelected && (
-                            <span style={{ fontSize: '0.68rem', color: '#0284c7', fontWeight: 700 }}>
-                              Selected Road ➔
-                            </span>
-                          )}
+                          <span style={{ fontSize: '0.68rem', color: isSelected ? '#0284c7' : '#94a3b8', fontWeight: isSelected ? 700 : 500 }}>
+                            {isSelected ? 'Selected Road ➔' : 'Inspect ➔'}
+                          </span>
+                        </div>
+                        <div className="rec-details-grid">
+                          <div className="rec-detail-row">
+                            <span className="rec-detail-label">Change</span>
+                            <span className="rec-detail-val">{getRecChange(rec)}</span>
+                          </div>
+                          <div className="rec-detail-row">
+                            <span className="rec-detail-label">Effect</span>
+                            <span className="rec-detail-val">{getRecEffect(rec)}</span>
+                          </div>
                         </div>
                       </div>
                     );
@@ -1674,244 +2065,9 @@ export default function App() {
                 </div>
               ) : !optimizing ? (
                 <p className="muted" style={{ padding: '2px 0' }}>
-                  Click <strong>2. Run Optimizer</strong> to discover candidate road closures (Braess paradox links) and expansions.
+                  Click <strong>2. Run Optimizer</strong> to discover candidate one-way street conversions (Braess paradox links) and expansions.
                 </p>
               ) : null}
-            </div>
-          </section>
-
-          {/* STEP 3: Three Scenario Simulations & Sections */}
-          <section className="step-card">
-            <div className="step-card-header">
-              <span className="step-card-title">
-                <Sliders size={14} /> Step 3: Evaluate Interventions
-              </span>
-            </div>
-            <div className="step-card-body">
-              {/* Step 3 Action Buttons */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <button
-                  className="btn step-action-btn"
-                  onClick={runClosingsOnlyStep}
-                  disabled={loading || optimizing || closeRecommendations.length === 0}
-                  style={{ borderLeft: '4px solid #ef4444' }}
-                  title="Simulate ONLY candidate road closures (non-stacking)"
-                >
-                  🚫 Simulate Closings Only ({closeRecommendations.length})
-                </button>
-
-                <button
-                  className="btn step-action-btn"
-                  onClick={runWideningsOnlyStep}
-                  disabled={loading || optimizing || widenRecommendations.length === 0}
-                  style={{ borderLeft: '4px solid #10b981' }}
-                  title="Simulate ONLY candidate road widenings (non-stacking)"
-                >
-                  ➕ Simulate Widenings Only ({widenRecommendations.length})
-                </button>
-
-                {/* Priority Selection for Combining Operations */}
-                <div style={{ marginTop: '2px', borderTop: '1px solid #f1f5f9', paddingTop: '4px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '3px' }}>
-                    <span style={{ fontSize: '0.71rem', color: '#475569', fontWeight: 600 }}>Combining Priority:</span>
-                    <span style={{ fontSize: '0.68rem', color: '#64748b' }}>
-                      {combinationPriority === 'closing' ? '🚫 Closures First' : '➕ Widenings First'}
-                    </span>
-                  </div>
-                  <div className="priority-btn-group">
-                    <button
-                      className={`priority-btn ${combinationPriority === 'closing' ? 'active closing' : ''}`}
-                      onClick={() => setCombinationPriority('closing')}
-                      title="Prioritize road closures: removes Braess shortcuts and includes non-conflicting widenings"
-                    >
-                      🚫 Closing Priority
-                    </button>
-                    <button
-                      className={`priority-btn ${combinationPriority === 'widening' ? 'active widening' : ''}`}
-                      onClick={() => setCombinationPriority('widening')}
-                      title="Prioritize road widenings: expands bottlenecks and includes non-conflicting closures"
-                    >
-                      ➕ Widening Priority
-                    </button>
-                  </div>
-
-                  <button
-                    className="btn btn-primary step-action-btn"
-                    onClick={() => runCombinedOperations(combinationPriority)}
-                    disabled={loading || optimizing || getCombinedActions(combinationPriority).length === 0}
-                    title="Simulate all combined operations in parallel across CPU cores instantly"
-                  >
-                    ⚡ Simulate Combined Operations ({getCombinedActions(combinationPriority).length})
-                  </button>
-                </div>
-              </div>
-
-              {/* Step 3 Simulating Indicator */}
-              {(activeStepRunning === 'closings' || activeStepRunning === 'widenings' || activeStepRunning === 'combined') && (
-                <div className="optimizer-progress-box" style={{ borderLeft: '3px solid #0284c7' }}>
-                  <div className="progress-label-row">
-                    <span>
-                      <strong>
-                        Simulating {activeStepRunning === 'closings' ? 'Closings Only' : activeStepRunning === 'widenings' ? 'Widenings Only' : `Combined (${combinationPriority === 'closing' ? 'Closing Priority' : 'Widening Priority'})`}...
-                      </strong>
-                    </span>
-                  </div>
-                </div>
-              )}
-
-              {/* THREE DEDICATED SECTIONS */}
-              {report && (
-                <div className="alert-box" style={{ fontSize: '0.72rem', margin: '4px 0' }}>
-                  {report.delta.summary_text}
-                </div>
-              )}
-              {error && (
-                <div className="alert-box error" style={{ fontSize: '0.72rem', margin: '4px 0' }}>
-                  {error}
-                </div>
-              )}
-              <div className="scenario-sections-grid" style={{ marginTop: '4px' }}>
-                {/* Section 1: Closings Only */}
-                <div className={`scenario-card ${activeScenarioMode === 'closings' ? 'active-map-view' : ''}`}>
-                  <div className="scenario-card-header">
-                    <span className="scenario-card-title" style={{ color: '#ef4444' }}>
-                      🚫 Section 1: Closings Only
-                    </span>
-                    {closingsResult && (
-                      <button
-                        className={`btn btn-sm ${activeScenarioMode === 'closings' ? 'btn-primary' : ''}`}
-                        onClick={() => viewScenarioOnMap('closings')}
-                      >
-                        {activeScenarioMode === 'closings' ? '✓ On Map' : 'View'}
-                      </button>
-                    )}
-                  </div>
-                  {closingsResult ? (
-                    <>
-                      <div className="comparison-box">
-                        <div>
-                          <span>Travel Time</span>
-                          <b>{closingsResult.report.intervention.summary_metrics.avg_travel_time_mins.toFixed(1)} min</b>
-                        </div>
-                        <div>
-                          <span>Average Speed</span>
-                          <b>{closingsResult.report.intervention.summary_metrics.avg_network_speed_kmh.toFixed(1)} km/h</b>
-                        </div>
-                        <strong className={closingsResult.report.delta.avg_travel_time_change_pct <= 0 ? 'good' : 'bad'}>
-                          {closingsResult.report.delta.avg_travel_time_change_pct <= 0 ? '' : '+'}
-                          {closingsResult.report.delta.avg_travel_time_change_pct.toFixed(1)}% vs baseline
-                        </strong>
-                      </div>
-                      <div className="scenario-changes-list">
-                        <strong style={{ fontSize: '0.7rem', color: '#475569' }}>Changes Applied ({closingsResult.actions.length}):</strong>
-                        {closingsResult.actions.map((act, idx) => (
-                          <div key={idx} className="scenario-change-item">
-                            {formatActionDescription(act)}
-                          </div>
-                        ))}
-                      </div>
-                    </>
-                  ) : (
-                    <p className="muted" style={{ fontSize: '0.72rem' }}>
-                      Click <strong>Simulate Closings Only</strong> to evaluate the impact of closing Braess shortcut links alone.
-                    </p>
-                  )}
-                </div>
-
-                {/* Section 2: Widenings Only */}
-                <div className={`scenario-card ${activeScenarioMode === 'widenings' ? 'active-map-view' : ''}`}>
-                  <div className="scenario-card-header">
-                    <span className="scenario-card-title" style={{ color: '#10b981' }}>
-                      ➕ Section 2: Widenings Only
-                    </span>
-                    {wideningsResult && (
-                      <button
-                        className={`btn btn-sm ${activeScenarioMode === 'widenings' ? 'btn-primary' : ''}`}
-                        onClick={() => viewScenarioOnMap('widenings')}
-                      >
-                        {activeScenarioMode === 'widenings' ? '✓ On Map' : 'View'}
-                      </button>
-                    )}
-                  </div>
-                  {wideningsResult ? (
-                    <>
-                      <div className="comparison-box">
-                        <div>
-                          <span>Travel Time</span>
-                          <b>{wideningsResult.report.intervention.summary_metrics.avg_travel_time_mins.toFixed(1)} min</b>
-                        </div>
-                        <div>
-                          <span>Average Speed</span>
-                          <b>{wideningsResult.report.intervention.summary_metrics.avg_network_speed_kmh.toFixed(1)} km/h</b>
-                        </div>
-                        <strong className={wideningsResult.report.delta.avg_travel_time_change_pct <= 0 ? 'good' : 'bad'}>
-                          {wideningsResult.report.delta.avg_travel_time_change_pct <= 0 ? '' : '+'}
-                          {wideningsResult.report.delta.avg_travel_time_change_pct.toFixed(1)}% vs baseline
-                        </strong>
-                      </div>
-                      <div className="scenario-changes-list">
-                        <strong style={{ fontSize: '0.7rem', color: '#475569' }}>Changes Applied ({wideningsResult.actions.length}):</strong>
-                        {wideningsResult.actions.map((act, idx) => (
-                          <div key={idx} className="scenario-change-item">
-                            {formatActionDescription(act)}
-                          </div>
-                        ))}
-                      </div>
-                    </>
-                  ) : (
-                    <p className="muted" style={{ fontSize: '0.72rem' }}>
-                      Click <strong>Simulate Widenings Only</strong> to evaluate the impact of corridor capacity expansions alone.
-                    </p>
-                  )}
-                </div>
-
-                {/* Section 3: All Operations Combined */}
-                <div className={`scenario-card ${activeScenarioMode === 'combined' ? 'active-map-view' : ''}`}>
-                  <div className="scenario-card-header">
-                    <span className="scenario-card-title" style={{ color: '#0284c7' }}>
-                      ⚡ Section 3: Combined ({combinationPriority === 'closing' ? 'Closing Priority' : 'Widening Priority'})
-                    </span>
-                    {combinedResult && (
-                      <button
-                        className={`btn btn-sm ${activeScenarioMode === 'combined' ? 'btn-primary' : ''}`}
-                        onClick={() => viewScenarioOnMap('combined')}
-                      >
-                        {activeScenarioMode === 'combined' ? '✓ On Map' : 'View'}
-                      </button>
-                    )}
-                  </div>
-                  {combinedResult ? (
-                    <>
-                      <div className="comparison-box">
-                        <div>
-                          <span>Travel Time</span>
-                          <b>{combinedResult.report.intervention.summary_metrics.avg_travel_time_mins.toFixed(1)} min</b>
-                        </div>
-                        <div>
-                          <span>Average Speed</span>
-                          <b>{combinedResult.report.intervention.summary_metrics.avg_network_speed_kmh.toFixed(1)} km/h</b>
-                        </div>
-                        <strong className={combinedResult.report.delta.avg_travel_time_change_pct <= 0 ? 'good' : 'bad'}>
-                          {combinedResult.report.delta.avg_travel_time_change_pct <= 0 ? '' : '+'}
-                          {combinedResult.report.delta.avg_travel_time_change_pct.toFixed(1)}% vs baseline
-                        </strong>
-                      </div>
-                      <div className="scenario-changes-list">
-                        <strong style={{ fontSize: '0.7rem', color: '#475569' }}>Changes Applied ({combinedResult.actions.length}):</strong>
-                        {combinedResult.actions.map((act, idx) => (
-                          <div key={idx} className="scenario-change-item">
-                            {formatActionDescription(act)}
-                          </div>
-                        ))}
-                      </div>
-                    </>
-                  ) : (
-                    <p className="muted" style={{ fontSize: '0.72rem' }}>
-                      Click <strong>Simulate All Operations</strong> to evaluate closures and widenings combined.
-                    </p>
-                  )}
-                </div>
-              </div>
             </div>
           </section>
         </aside>

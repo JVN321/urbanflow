@@ -346,8 +346,79 @@ details summary { cursor: pointer; color: var(--text-primary); font-weight: 700;
 .scenario-change-item {
   display: flex;
   align-items: center;
-  gap: 5px;
-  color: var(--text-secondary);
+  justify-content: space-between;
+  padding: 4px 8px;
+  background: #f8fafc;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-size: 0.7rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.scenario-change-item:hover {
+  background: #f0f9ff;
+  border-color: #0284c7;
+  color: #0284c7;
+  transform: translateY(-1px);
+}
+
+.scenario-change-item.selected {
+  background: #e0f2fe;
+  border-color: #0284c7;
+  color: #0369a1;
+  font-weight: 600;
+  box-shadow: 0 0 0 1px #0284c7;
+}
+
+.scenario-change-item .inspect-arrow {
+  font-size: 0.65rem;
+  color: #94a3b8;
+  font-weight: 600;
+  white-space: nowrap;
+  margin-left: 6px;
+}
+
+.scenario-change-item:hover .inspect-arrow {
+  color: #0284c7;
+}
+
+/* Structured Intuitive Measure Card Details */
+.rec-details-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 5px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border-color);
+  font-size: 0.7rem;
+}
+
+.rec-detail-row {
+  display: grid;
+  grid-template-columns: 50px 1fr;
+  align-items: baseline;
+  gap: 6px;
+  line-height: 1.25;
+}
+
+.rec-detail-label {
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 0.61rem;
+  letter-spacing: 0.03em;
+  color: #64748b;
+  background: #f1f5f9;
+  padding: 1px 4px;
+  border-radius: 3px;
+  text-align: center;
+}
+
+.rec-detail-val {
+  color: #334155;
+  font-size: 0.69rem;
 }
 
 /* Route Inspector Card */
@@ -451,20 +522,21 @@ details summary { cursor: pointer; color: var(--text-primary); font-weight: 700;
 
 .legend {
   position: absolute;
-  bottom: 14px;
-  left: 14px;
+  bottom: 12px;
+  left: 12px;
   z-index: 1000;
-  background: rgba(255, 255, 255, 0.94);
+  background: rgba(255, 255, 255, 0.95);
   backdrop-filter: blur(8px);
   border: 1px solid var(--border-color);
-  padding: 7px 14px;
+  border-radius: 6px;
+  padding: 5px 10px;
   display: flex;
   align-items: center;
-  gap: 14px;
-  font-size: 0.72rem;
-  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.12);
+  gap: 10px;
+  font-size: 0.69rem;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.1);
   flex-wrap: wrap;
-  max-width: calc(100% - 210px);
+  max-width: calc(100% - 180px);
 }
 
 .legend span {
@@ -962,6 +1034,209 @@ details summary { cursor: pointer; color: var(--text-primary); font-weight: 700;
   background: #f0f9ff !important;
   border-color: #0284c7 !important;
   box-shadow: 0 1px 4px rgba(2, 132, 199, 0.2);
+}
+
+/* Center Workspace with Docked Bottom Bar */
+.center-workspace {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.center-workspace .map-pane {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+/* Docked Bottom Bar for 3 Side-by-Side Optimization Applications */
+.bottom-bar-pane {
+  background: #ffffff;
+  border-top: 1px solid var(--border-color);
+  box-shadow: 0 -4px 16px rgba(15, 23, 42, 0.08);
+  z-index: 1050;
+  display: flex;
+  flex-direction: column;
+  height: 310px;
+  max-height: 44vh;
+  min-height: 200px;
+  transition: max-height 0.25s cubic-bezier(0.16, 1, 0.3, 1), height 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  flex-shrink: 0;
+}
+
+.bottom-bar-pane.collapsed {
+  height: 42px;
+  max-height: 42px;
+  min-height: 42px;
+  overflow: hidden;
+}
+
+.bottom-bar-header {
+  min-height: 42px;
+  padding: 4px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #ffffff;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+  user-select: none;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.bottom-bar-title-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.bottom-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.bottom-bar-priority-toggle {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: #f1f5f9;
+  padding: 1px;
+}
+
+.bottom-bar-priority-toggle .priority-pill-btn {
+  border: none;
+  background: transparent;
+  padding: 3px 8px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.bottom-bar-priority-toggle .priority-pill-btn.active.oneway {
+  background: #ffffff;
+  color: #7c3aed;
+  box-shadow: 0 1px 2px rgba(124, 58, 237, 0.18);
+}
+
+.bottom-bar-priority-toggle .priority-pill-btn.active.widening {
+  background: #ffffff;
+  color: #059669;
+  box-shadow: 0 1px 2px rgba(5, 150, 105, 0.18);
+}
+
+.bottom-bar-alert-banner {
+  background: #f0fdf4;
+  border-bottom: 1px solid #bbf7d0;
+  color: #166534;
+  padding: 4px 12px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  line-height: 1.35;
+}
+
+.bottom-bar-body {
+  padding: 8px 12px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: #f8fafc;
+}
+
+.bottom-bar-column {
+  background: #ffffff;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 10px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.bottom-bar-column.active-map-view {
+  border-color: #0284c7;
+  box-shadow: 0 0 0 1.5px #0284c7, 0 2px 6px rgba(2, 132, 199, 0.12);
+}
+
+.bottom-bar-column-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 4px;
+  flex-shrink: 0;
+}
+
+.bottom-bar-changes-list {
+  flex: 1;
+  min-height: 0;
+  max-height: 125px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 4px;
+  padding-right: 3px;
+}
+
+.badge-oneway {
+  background: #7c3aed;
+  border-color: #ddd6fe;
+}
+
+.legend-line.oneway {
+  background: #7c3aed;
+}
+
+/* Expanded Recommendation Container for Step 2 in Right Sidebar */
+.sidebar-right-pane .step-card:last-child {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-right-pane .step-card:last-child .step-card-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.recommendations-scroll-container {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-height: 260px;
+  max-height: calc(100vh - 280px);
+  overflow-y: auto;
+  padding-right: 2px;
 }
 
 

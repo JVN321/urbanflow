@@ -33,6 +33,24 @@ def apply_modifications(base_graph: UrbanFlowGraph, modifications: List[Interven
                 # Default heuristic: scale capacity with lane increase
                 edge.capacity_vph = edge.capacity_vph * (edge.lanes / max(1, edge.lanes - 1))
         
+        elif mod.action == "ONE_WAY" and mod.edge_id in edge_map:
+            # Converts corridor to a designated one-way street:
+            # 1. Finds opposing counter-flow edge (v ➔ u) and removes it
+            # 2. Allocates full street capacity to forward one-way flow (u ➔ v)
+            fwd_edge = edge_map[mod.edge_id]
+            opp_edge = next(
+                (e for e in list(edge_map.values()) if e.source == fwd_edge.target and e.target == fwd_edge.source),
+                None
+            )
+            if opp_edge and opp_edge.id in edge_map:
+                del edge_map[opp_edge.id]
+                # Reclaim opposing lane space for forward flow
+                fwd_edge.lanes = fwd_edge.lanes + max(1, opp_edge.lanes)
+                fwd_edge.capacity_vph = round(fwd_edge.capacity_vph * 1.4, 1)
+            else:
+                # If no opposite edge exists (or synthetic directed shortcut), remove the link to eliminate conflict
+                del edge_map[mod.edge_id]
+
         elif mod.action == "CLOSE" and mod.edge_id in edge_map:
             # Remove edge from network
             del edge_map[mod.edge_id]
@@ -97,13 +115,13 @@ def evaluate_intervention(
     )
     
     has_added_or_widened = any(m.action in ("ADD", "WIDEN") for m in modifications)
-    has_removed = any(m.action == "CLOSE" for m in modifications)
+    has_removed = any(m.action in ("CLOSE", "ONE_WAY") for m in modifications)
     is_braess = ((time_change_pct > 0.5) and has_added_or_widened) or ((time_change_pct < -0.5) and has_removed)
     
     if (time_change_pct < -0.5) and has_removed:
         summary_text = (
-            f"✨ Braess Paradox Resolved! Removing bottleneck shortcut reduced average travel time by "
-            f"{abs(time_change_pct):.1f}% and increased overall traffic flow."
+            f"✨ Network Latency Optimized! Converting to one-way / removing shortcut bottleneck reduced average travel time by "
+            f"{abs(time_change_pct):.1f}% and boosted overall network flow."
         )
     elif is_braess:
         summary_text = (
