@@ -7,7 +7,7 @@ UrbanFlow Network Optimization Engine:
 """
 import os
 import networkx as nx
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from collections import Counter
 from typing import List, Dict, Tuple, Optional, Any
 from app.core.graph_model import (
@@ -199,10 +199,10 @@ def optimize_traffic_network(
     recommendations: List[OptimizerRecommendation] = []
     coupled_actions_pool: List[InterventionAction] = []
 
-    # 3. Parallel Candidate Simulation via ThreadPoolExecutor
+    # 3. Parallel Candidate Simulation via ProcessPoolExecutor (Multi-Core)
     if candidate_tasks:
         worker_count = min(OPTIMIZER_WORKERS, len(candidate_tasks))
-        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        with ProcessPoolExecutor(max_workers=worker_count) as executor:
             futures = [
                 executor.submit(
                     _eval_single_action,

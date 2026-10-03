@@ -187,37 +187,191 @@ details summary { cursor: pointer; color: var(--text-primary); font-weight: 700;
   color: #dc2626;
 }
 
-/* Full-Bleed 2-Pane Split Layout (75% Map / 25% Sidebar) */
+/* Full-Bleed 3-Pane Split Layout (Left Config / Center Map / Right Workflow) */
 .app-layout {
   display: grid;
-  grid-template-columns: 320px 1fr;
+  grid-template-columns: 300px 1fr 360px;
   height: calc(100vh - 52px);
   overflow: hidden;
 }
 
-@media (max-width: 1024px) {
+@media (max-width: 1200px) {
   .app-layout {
-    grid-template-columns: 280px 1fr;
+    grid-template-columns: 270px 1fr 330px;
   }
 }
 
-@media (max-width: 760px) {
+@media (max-width: 860px) {
   body { overflow: auto; }
   .app-header { height: auto; min-height: 52px; flex-wrap: wrap; gap: 8px; padding: 9px 12px; }
   .header-actions { width: 100%; }
   .scenario-select { flex: 1; width: auto; }
   .app-layout { grid-template-columns: 1fr; height: auto; min-height: calc(100vh - 90px); }
-  .sidebar-pane { order: 2; max-height: none; }
-  .map-pane { order: 1; min-height: 58vh; }
+  .sidebar-left-pane { order: 2; max-height: none; }
+  .map-pane { order: 1; min-height: 50vh; }
+  .sidebar-right-pane { order: 3; max-height: none; }
   .legend { flex-wrap: wrap; max-width: calc(100% - 24px); }
 }
 
-.sidebar-pane {
+.sidebar-pane, .sidebar-left-pane {
   background: #ffffff;
   border-right: 1px solid var(--border-color);
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+}
+
+.sidebar-right-pane {
+  background: #ffffff;
+  border-left: 1px solid var(--border-color);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+}
+
+/* Step-by-Step Workflow & Fixed Action Buttons */
+.step-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+}
+
+.step-card-header {
+  padding: 8px 12px;
+  background: #ffffff;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.step-card-title {
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.step-card-body {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 0.78rem;
+}
+
+.step-action-btn {
+  width: 100%;
+  height: 36px;
+  min-height: 36px;
+  max-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font-weight: 600;
+  font-size: 0.82rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+}
+
+.step-action-btn.btn-sm {
+  height: 30px;
+  min-height: 30px;
+  max-height: 30px;
+  font-size: 0.75rem;
+}
+
+/* Scenario Simulation Sections */
+.scenario-sections-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.scenario-card {
+  border: 1px solid var(--border-color);
+  background: #ffffff;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.scenario-card.active-map-view {
+  border-color: #0284c7;
+  box-shadow: 0 0 0 1px #0284c7;
+}
+
+.scenario-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.scenario-card-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.scenario-changes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 4px 0;
+  max-height: 120px;
+  overflow-y: auto;
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  background: var(--bg-surface);
+  padding: 6px;
+  border: 1px solid var(--border-color);
+}
+
+.scenario-change-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-secondary);
+}
+
+/* Route Inspector Card */
+.route-inspector-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inspector-meta-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.75rem;
+  padding: 2px 0;
+}
+
+.inspector-meta-row span {
+  color: var(--text-muted);
+}
+
+.inspector-meta-row b {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
 }
 
 .map-pane {

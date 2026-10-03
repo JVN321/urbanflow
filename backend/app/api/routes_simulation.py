@@ -78,21 +78,45 @@ async def stream_simulation(
     beta: float = Query(default=4.0, ge=0.1),
     convergence_tolerance: float = Query(default=0.001, gt=0.0),
     algorithm: str = Query(default="msa"),
-    cost_model: str = Query(default="bpr")
+    cost_model: str = Query(default="bpr"),
+    road_density: float = Query(default=1.0, ge=0.0, le=1.0)
 ):
     """Stream MSA iterations, then emit the canonical final simulation result."""
+    import time
     from app.api.routes_analysis import _AREA_GRAPHS, _AREA_DEMANDS
+    from app.core.osm_loader import _allowed_road_types
     graph = _AREA_GRAPHS.get(graph_id) or _GRAPHS.get(graph_id)
     if not graph:
         raise HTTPException(status_code=404, detail=f"Graph '{graph_id}' not found.")
+
+    # Filter edges if road density filter is specified
+    if road_density < 0.98 and graph.edges:
+        allowed = _allowed_road_types(road_density)
+        active_edges = [e for e in graph.edges if e.road_type in allowed]
+        if len(active_edges) >= 2:
+            active_node_ids = {e.source for e in active_edges} | {e.target for e in active_edges}
+            active_nodes = [n for n in graph.nodes if n.id in active_node_ids]
+            graph = UrbanFlowGraph(
+                graph_id=graph.graph_id,
+                name=graph.name,
+                crs=graph.crs,
+                nodes=active_nodes,
+                edges=active_edges
+            )
 
     demand = _AREA_DEMANDS.get(graph_id) or _DEMANDS.get(graph_id) or TrafficDemand(demand_id="empty_demand", demands=[])
     config = SimulationConfig(max_iterations=iterations, default_alpha=alpha, default_beta=beta, convergence_tolerance=convergence_tolerance, algorithm=algorithm, cost_model=cost_model)
     queue: asyncio.Queue = asyncio.Queue()
     loop = asyncio.get_running_loop()
+    sim_start_time = time.time()
 
     def on_progress(event):
-        loop.call_soon_threadsafe(queue.put_nowait, {"type": "progress", **event})
+        elapsed = time.time() - sim_start_time
+        iter_curr = event.get("iteration", 1)
+        iter_max = event.get("max_iterations", iterations)
+        rem_iter = max(0, iter_max - iter_curr)
+        eta_sec = round((elapsed / max(iter_curr, 1)) * rem_iter, 1) if iter_curr > 0 else 0.0
+        loop.call_soon_threadsafe(queue.put_nowait, {"type": "progress", "eta_sec": eta_sec, "elapsed_sec": round(elapsed, 1), **event})
 
     async def run_engine():
         result = await asyncio.to_thread(

@@ -71,3 +71,41 @@ def test_braess_3route_paradox_detection():
     assert top.travel_time_reduction_pct > 50.0
     assert top.is_braess_fix is True
 
+
+def test_simulation_stream_with_density_and_eta():
+    import json
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    client = TestClient(app)
+    response = client.get("/api/simulate/stream?graph_id=braess_3route&demand_multiplier=1.0&road_density=0.5")
+    assert response.status_code == 200
+    events = [line for line in response.text.split("\n") if line.startswith("data: ")]
+    assert len(events) > 0
+    # Parse last progress or complete event
+    parsed = [json.loads(line[len("data: "):]) for line in events]
+    progress_events = [e for e in parsed if e.get("type") == "progress"]
+    complete_events = [e for e in parsed if e.get("type") == "complete"]
+    assert len(progress_events) > 0 or len(complete_events) > 0
+    if progress_events:
+        assert "eta_sec" in progress_events[-1]
+        assert "elapsed_sec" in progress_events[-1]
+
+
+def test_optimizer_stream_with_eta():
+    import json
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    client = TestClient(app)
+    response = client.get("/api/optimizer/stream-optimize?graph_id=braess_3route&demand_multiplier=1.0")
+    assert response.status_code == 200
+    events = [line for line in response.text.split("\n") if line.startswith("data: ")]
+    assert len(events) > 0
+    parsed = [json.loads(line[len("data: "):]) for line in events]
+    progress_events = [e for e in parsed if e.get("type") == "progress"]
+    assert len(progress_events) > 0
+    assert "eta_sec" in progress_events[0]
+    assert "elapsed_sec" in progress_events[0]
+
+

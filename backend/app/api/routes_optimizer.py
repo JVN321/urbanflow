@@ -1,7 +1,7 @@
 import os
 import json
 import asyncio
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from app.core.graph_model import (
@@ -25,8 +25,16 @@ from app.core.optimizer import select_corridor_candidates
 
 router = APIRouter(prefix="/api/optimizer", tags=["Optimizer"])
 
-# Optimized worker pool: use all available CPU cores for high-speed parallel evaluations
+# Multi-core multiprocessing pool utilizing all available CPU cores (e.g. 24 cores)
 _OPTIMIZER_WORKERS = max(2, min(32, os.cpu_count() or 4))
+_PROCESS_POOL: Optional[ProcessPoolExecutor] = None
+
+
+def get_optimizer_pool() -> ProcessPoolExecutor:
+    global _PROCESS_POOL
+    if _PROCESS_POOL is None:
+        _PROCESS_POOL = ProcessPoolExecutor(max_workers=_OPTIMIZER_WORKERS)
+    return _PROCESS_POOL
 
 
 def _eval_candidate(
@@ -245,7 +253,8 @@ async def stream_optimization(
     beta: float = 4.0
 ):
     """
-    SSE streaming endpoint for real-time optimization evaluation with minimal CPU/RAM footprint.
+    SSE streaming endpoint for real-time optimization evaluation utilizing all CPU cores.
+    Each candidate evaluation runs on a dedicated worker process without GIL blocking.
     """
     if graph_id not in _GRAPHS and graph_id not in _AREA_GRAPHS:
         raise HTTPException(status_code=404, detail=f"Graph '{graph_id}' not found.")
@@ -263,108 +272,166 @@ async def stream_optimization(
         default_beta=beta
     )
 
-    async def event_generator():
-        yield f"data: {json.dumps({'type': 'status', 'message': 'Running baseline equilibrium simulation...'})}\n\n"
-        await asyncio.sleep(0.01)
+    queue: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
 
-        baseline = simulate_traffic_msa(base_graph, demand, demand_multiplier, config)
-        base_avg_time = baseline.summary_metrics.avg_travel_time_mins
-        baseline_speed = baseline.summary_metrics.avg_network_speed_kmh
+    async def run_optimizer_pipeline():
+        try:
+            pool = get_optimizer_pool()
+            await queue.put({"type": "status", "message": "Running baseline equilibrium simulation across CPU cores..."})
 
-        yield f"data: {json.dumps({'type': 'baseline', 'avg_travel_time_mins': base_avg_time, 'bottlenecks_count': len(baseline.bottlenecks)})}\n\n"
-        await asyncio.sleep(0.01)
+            baseline = await loop.run_in_executor(
+                pool,
+                simulate_traffic_msa,
+                base_graph,
+                demand,
+                demand_multiplier,
+                config
+            )
+            base_avg_time = baseline.summary_metrics.avg_travel_time_mins
+            baseline_speed = baseline.summary_metrics.avg_network_speed_kmh
 
-        G_undir = nx.Graph()
-        for e in base_graph.edges:
-            G_undir.add_edge(e.source, e.target)
+            await queue.put({
+                "type": "baseline",
+                "avg_travel_time_mins": base_avg_time,
+                "bottlenecks_count": len(baseline.bottlenecks)
+            })
 
-        candidate_jobs = _build_candidate_jobs(base_graph, baseline, G_undir, max_candidates=max_candidates)
-        total_candidates = len(candidate_jobs)
+            G_undir = nx.Graph()
+            for e in base_graph.edges:
+                G_undir.add_edge(e.source, e.target)
 
-        yield f"data: {json.dumps({'type': 'init', 'total': total_candidates, 'total_candidates': total_candidates, 'current': 0, 'baseline_time': base_avg_time})}\n\n"
-        await asyncio.sleep(0.01)
+            candidate_jobs = _build_candidate_jobs(base_graph, baseline, G_undir, max_candidates=max_candidates)
+            total_candidates = len(candidate_jobs)
 
-        recommendations = []
-        eval_idx = 0
+            await queue.put({
+                "type": "init",
+                "total": total_candidates,
+                "total_candidates": total_candidates,
+                "current": 0,
+                "baseline_time": base_avg_time
+            })
 
-        # Run candidate evaluations in parallel using lightweight shared-memory thread pool
-        with ThreadPoolExecutor(max_workers=_OPTIMIZER_WORKERS) as executor:
-            futures = {
-                executor.submit(
-                    _eval_candidate,
-                    base_graph,
-                    demand,
-                    demand_multiplier,
-                    config,
-                    job_type,
-                    edge_id,
-                    extra,
-                    base_avg_time,
-                    baseline_speed,
-                    baseline.edge_metrics
-                ): (job_type, edge_id)
-                for job_type, edge_id, extra in candidate_jobs
-            }
+            import time
+            recommendations = []
+            eval_idx = 0
+            opt_start_time = time.time()
+            edge_map = {e.id: e for e in base_graph.edges}
 
-            for fut in as_completed(futures):
-                eval_idx += 1
-                job_type, edge_id = futures[fut]
-                edge = next((e for e in base_graph.edges if e.id == edge_id), None)
-                edge_name = edge.name or edge_id if edge else edge_id
-
+            async def eval_job(job_type, edge_id, extra):
+                nonlocal eval_idx
+                rec = None
                 try:
-                    rec = fut.result()
-                    if rec and rec.travel_time_reduction_pct >= min_savings_pct:
-                        recommendations.append(rec)
-                        yield f"data: {json.dumps({'type': 'discovery', 'recommendation': rec.model_dump()})}\n\n"
-                        await asyncio.sleep(0.005)
+                    rec = await loop.run_in_executor(
+                        pool,
+                        _eval_candidate,
+                        base_graph,
+                        demand,
+                        demand_multiplier,
+                        config,
+                        job_type,
+                        edge_id,
+                        extra,
+                        base_avg_time,
+                        baseline_speed,
+                        baseline.edge_metrics
+                    )
                 except Exception:
                     pass
 
+                eval_idx += 1
+                edge = edge_map.get(edge_id)
+                edge_name = edge.name or edge_id if edge else edge_id
+                elapsed = time.time() - opt_start_time
                 pct = round((eval_idx / max(total_candidates, 1)) * 100, 1)
-                yield f"data: {json.dumps({'type': 'progress', 'current': eval_idx, 'total': total_candidates, 'percent': pct, 'candidate': edge_id, 'name': edge_name, 'action_type': job_type})}\n\n"
-                await asyncio.sleep(0.005)
+                rem_cands = max(0, total_candidates - eval_idx)
+                eta_sec = round((elapsed / max(eval_idx, 1)) * rem_cands, 1) if eval_idx > 0 else 0.0
 
-        recommendations.sort(key=lambda r: r.travel_time_reduction_pct, reverse=True)
-        for idx, rec in enumerate(recommendations, start=1):
-            rec.rank = idx
+                if rec and rec.travel_time_reduction_pct >= min_savings_pct:
+                    recommendations.append(rec)
+                    await queue.put({"type": "discovery", "recommendation": rec.model_dump()})
 
-        optimal_actions = []
-        best_closure = next((r.action for r in recommendations if r.type == "REMOVE_ROAD"), None)
-        if best_closure:
-            optimal_actions.append(best_closure)
-        for r in recommendations:
-            if r.type == "WIDEN_ROAD":
-                if not any(a.edge_id == r.action.edge_id for a in optimal_actions):
-                    optimal_actions.append(r.action)
-            if len(optimal_actions) >= 3:
-                break
+                await queue.put({
+                    "type": "progress",
+                    "current": eval_idx,
+                    "total": total_candidates,
+                    "percent": pct,
+                    "candidate": edge_id,
+                    "name": edge_name,
+                    "action_type": job_type,
+                    "eta_sec": eta_sec,
+                    "elapsed_sec": round(elapsed, 1)
+                })
 
-        overall_gain = 0.0
-        if optimal_actions:
-            try:
-                res_comb = simulate_traffic_msa(apply_modifications(base_graph, optimal_actions), demand, demand_multiplier, config)
-                comb_t = res_comb.summary_metrics.avg_travel_time_mins
-                comb_g = ((base_avg_time - comb_t) / max(base_avg_time, 0.001)) * 100.0
-                if comb_g > 0:
-                    overall_gain = comb_g
-                else:
-                    optimal_actions = [recommendations[0].action]
-                    overall_gain = recommendations[0].travel_time_reduction_pct
-            except Exception:
-                optimal_actions = [recommendations[0].action] if recommendations else []
-                overall_gain = recommendations[0].travel_time_reduction_pct if recommendations else 0.0
+            # Evaluate candidates concurrently across all CPU worker processes
+            await asyncio.gather(*(eval_job(j, e, x) for j, e, x in candidate_jobs))
 
-        final_result = OptimizationResult(
-            graph_id=base_graph.graph_id,
-            baseline_avg_travel_time_mins=round(base_avg_time, 2),
-            total_candidates_evaluated=total_candidates,
-            recommendations=recommendations,
-            optimal_combined_actions=optimal_actions,
-            projected_overall_improvement_pct=round(overall_gain, 2),
-            summary=f"Discovered {len(recommendations)} high-impact interventions. Top intervention achieves -{recommendations[0].travel_time_reduction_pct if recommendations else 0}% latency reduction."
-        )
+            recommendations.sort(key=lambda r: r.travel_time_reduction_pct, reverse=True)
+            for idx, rec in enumerate(recommendations, start=1):
+                rec.rank = idx
 
-        yield f"data: {json.dumps({'type': 'complete', 'result': final_result.model_dump()})}\n\n"
+            optimal_actions = []
+            best_closure = next((r.action for r in recommendations if r.type == "REMOVE_ROAD"), None)
+            if best_closure:
+                optimal_actions.append(best_closure)
+            for r in recommendations:
+                if r.type == "WIDEN_ROAD":
+                    if not any(a.edge_id == r.action.edge_id for a in optimal_actions):
+                        optimal_actions.append(r.action)
+                if len(optimal_actions) >= 3:
+                    break
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+            overall_gain = 0.0
+            if optimal_actions:
+                try:
+                    res_comb = await loop.run_in_executor(
+                        pool,
+                        simulate_traffic_msa,
+                        apply_modifications(base_graph, optimal_actions),
+                        demand,
+                        demand_multiplier,
+                        config
+                    )
+                    comb_t = res_comb.summary_metrics.avg_travel_time_mins
+                    comb_g = ((base_avg_time - comb_t) / max(base_avg_time, 0.001)) * 100.0
+                    if comb_g > 0:
+                        overall_gain = comb_g
+                    else:
+                        optimal_actions = [recommendations[0].action]
+                        overall_gain = recommendations[0].travel_time_reduction_pct
+                except Exception:
+                    optimal_actions = [recommendations[0].action] if recommendations else []
+                    overall_gain = recommendations[0].travel_time_reduction_pct if recommendations else 0.0
+
+            final_result = OptimizationResult(
+                graph_id=base_graph.graph_id,
+                baseline_avg_travel_time_mins=round(base_avg_time, 2),
+                total_candidates_evaluated=total_candidates,
+                recommendations=recommendations,
+                optimal_combined_actions=optimal_actions,
+                projected_overall_improvement_pct=round(overall_gain, 2),
+                summary=f"Discovered {len(recommendations)} high-impact interventions. Top intervention achieves -{recommendations[0].travel_time_reduction_pct if recommendations else 0}% latency reduction."
+            )
+
+            await queue.put({"type": "complete", "result": final_result.model_dump()})
+        except Exception as err:
+            await queue.put({"type": "error", "message": str(err)})
+
+    async def event_generator():
+        task = asyncio.create_task(run_optimizer_pipeline())
+        try:
+            while True:
+                event = await queue.get()
+                yield f"data: {json.dumps(event)}\n\n"
+                if event.get("type") in ("complete", "error"):
+                    break
+            await task
+        except asyncio.CancelledError:
+            task.cancel()
+            raise
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )

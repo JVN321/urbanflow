@@ -36,6 +36,23 @@ app.include_router(analysis_router)
 app.include_router(osm_router)
 
 
+@app.get("/", tags=["Health"])
+def root():
+    return {
+        "status": "online",
+        "service": "UrbanFlow Traffic Simulation & Optimization Engine",
+        "version": "1.0.0",
+        "docs": "/docs",
+        "health": "/api/health"
+    }
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    from fastapi.responses import Response
+    return Response(status_code=204)
+
+
 @app.get("/api/health", tags=["Health"])
 def health_check():
     return {

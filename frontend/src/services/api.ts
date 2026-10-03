@@ -10,6 +10,15 @@ import {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
 
+export const ROAD_PRIORITY_LEVELS = [
+  'motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'residential', 'service', 'unclassified', 'living_street'
+];
+
+export function allowedRoadTypes(roadDensity: number): Set<string> {
+  const n = Math.max(2, Math.round(2 + roadDensity * (ROAD_PRIORITY_LEVELS.length - 2)));
+  return new Set(ROAD_PRIORITY_LEVELS.slice(0, n));
+}
+
 export const MOCK_BRAESS_BASELINE_GRAPH: UrbanFlowGraph = {
   graph_id: 'braess_4node',
   name: 'Braess Paradox Network (Baseline)',
@@ -71,6 +80,44 @@ export const importOSMPlace = async (payload: { place: string; network_type?: st
   return response.json();
 };
 
+export interface RandomAreaResponse {
+  city: string;
+  country: string;
+  description: string;
+  bbox: {
+    min_lat: number;
+    min_lng: number;
+    max_lat: number;
+    max_lng: number;
+  };
+  area_id: string;
+  graph: UrbanFlowGraph;
+  demand?: any;
+  result: SimulationResult;
+}
+
+export const fetchRandomOsmArea = async (city?: string, demandMultiplier: number = 1.0, roadDensity: number = 1.0): Promise<RandomAreaResponse> => {
+  const params = new URLSearchParams();
+  if (city) params.set('city', city);
+  params.set('demand_multiplier', demandMultiplier.toString());
+  params.set('road_density', roadDensity.toString());
+  params.set('simulate', 'true');
+
+  const res = await fetch(`${API_BASE_URL}/osm/random?${params.toString()}`);
+  if (!res.ok) {
+    let detail = '';
+    try { detail = (await res.json()).detail || ''; } catch { /* ignore */ }
+    throw new Error(`Random area extraction failed (HTTP ${res.status})${detail ? `: ${detail}` : ''}`);
+  }
+  return await res.json();
+};
+
+export const fetchCuratedLocations = async (): Promise<Array<{ city: string; country: string; min_lat: number; min_lng: number; max_lat: number; max_lng: number; description: string }>> => {
+  const res = await fetch(`${API_BASE_URL}/osm/locations`);
+  if (!res.ok) throw new Error(`Failed to load locations (HTTP ${res.status})`);
+  return await res.json();
+};
+
 export const runSimulation = async (
   graphId: string,
   demandMultiplier: number = 1.0,
@@ -90,6 +137,8 @@ export interface SimulationProgressEvent {
   max_iterations: number;
   converged: boolean;
   edge_volumes: Record<string, number>;
+  eta_sec?: number;
+  elapsed_sec?: number;
 }
 
 export const startSimulationStream = (
@@ -98,9 +147,10 @@ export const startSimulationStream = (
   config: SimulationConfig,
   onProgress: (event: SimulationProgressEvent) => void,
   onComplete: (result: SimulationResult) => void,
-  onError: (error: Error) => void
+  onError: (error: Error) => void,
+  roadDensity: number = 1.0
 ) => {
-  const source = new EventSource(`${API_BASE_URL}/simulate/stream?graph_id=${encodeURIComponent(graphId)}&demand_multiplier=${demandMultiplier}&iterations=${config.max_iterations}&alpha=${config.default_alpha}&beta=${config.default_beta}&convergence_tolerance=${config.convergence_tolerance}&algorithm=${config.algorithm}&cost_model=${config.cost_model}`);
+  const source = new EventSource(`${API_BASE_URL}/simulate/stream?graph_id=${encodeURIComponent(graphId)}&demand_multiplier=${demandMultiplier}&iterations=${config.max_iterations}&alpha=${config.default_alpha}&beta=${config.default_beta}&convergence_tolerance=${config.convergence_tolerance}&algorithm=${config.algorithm}&cost_model=${config.cost_model}&road_density=${roadDensity}`);
   source.onmessage = (event) => {
     try {
       const payload = JSON.parse(event.data);
@@ -188,6 +238,8 @@ export interface OptimizationProgressEvent {
   action_type: string;
   time_pct?: number;
   status?: string;
+  eta_sec?: number;
+  elapsed_sec?: number;
 }
 
 export const startOptimizationStream = (
