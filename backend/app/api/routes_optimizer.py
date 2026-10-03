@@ -25,16 +25,10 @@ from app.core.optimizer import select_corridor_candidates
 
 router = APIRouter(prefix="/api/optimizer", tags=["Optimizer"])
 
-# Multi-core multiprocessing pool utilizing all available CPU cores (e.g. 24 cores)
+# Multi-core thread pool utilizing all available CPU cores (e.g. 24 cores)
+# Rustworkx releases the Python GIL during Dijkstra pathfinding, enabling full multi-core performance
+# without spawning persistent Python child processes.
 _OPTIMIZER_WORKERS = max(2, min(32, os.cpu_count() or 4))
-_PROCESS_POOL: Optional[ProcessPoolExecutor] = None
-
-
-def get_optimizer_pool() -> ProcessPoolExecutor:
-    global _PROCESS_POOL
-    if _PROCESS_POOL is None:
-        _PROCESS_POOL = ProcessPoolExecutor(max_workers=_OPTIMIZER_WORKERS)
-    return _PROCESS_POOL
 
 
 def _eval_candidate(
@@ -131,11 +125,17 @@ def _build_candidate_jobs(base_graph: UrbanFlowGraph, baseline, G_undir: nx.Grap
     Corridor Alternative Analysis candidate builder:
     Identifies high-priority Braess shortcuts with viable alternative corridors,
     plus top bottleneck corridors for capacity expansion.
+    Strictly deduplicates edges so no road is tested for both CLOSE and WIDEN.
     """
     max_rem = max(3, int(max_candidates * 0.7))
     max_wid = max(2, int(max_candidates * 0.3))
     tasks = select_corridor_candidates(base_graph, baseline, max_removals=max_rem, max_widenings=max_wid)
-    candidates = [(job_type, action.edge_id, meta) for action, job_type, meta in tasks]
+    candidates = []
+    seen_edges = set()
+    for action, job_type, meta in tasks:
+        if action.edge_id not in seen_edges:
+            seen_edges.add(action.edge_id)
+            candidates.append((job_type, action.edge_id, meta))
     return candidates[:max_candidates]
 
 
@@ -200,6 +200,13 @@ def get_recommendations(
             except Exception:
                 pass
 
+    # Deduplicate recommendations by edge_id (keep highest reduction pct)
+    rec_by_edge = {}
+    for r in recommendations:
+        if r.edge_id not in rec_by_edge or r.travel_time_reduction_pct > rec_by_edge[r.edge_id].travel_time_reduction_pct:
+            rec_by_edge[r.edge_id] = r
+    recommendations = list(rec_by_edge.values())
+
     recommendations.sort(key=lambda r: r.travel_time_reduction_pct, reverse=True)
     for idx, rec in enumerate(recommendations, start=1):
         rec.rank = idx
@@ -254,7 +261,8 @@ async def stream_optimization(
 ):
     """
     SSE streaming endpoint for real-time optimization evaluation utilizing all CPU cores.
-    Each candidate evaluation runs on a dedicated worker process without GIL blocking.
+    Uses multi-threaded worker execution with instant cleanup upon completion or cancellation.
+    Zero lingering Python processes.
     """
     if graph_id not in _GRAPHS and graph_id not in _AREA_GRAPHS:
         raise HTTPException(status_code=404, detail=f"Graph '{graph_id}' not found.")
@@ -276,8 +284,8 @@ async def stream_optimization(
     loop = asyncio.get_running_loop()
 
     async def run_optimizer_pipeline():
+        pool = ThreadPoolExecutor(max_workers=_OPTIMIZER_WORKERS)
         try:
-            pool = get_optimizer_pool()
             await queue.put({"type": "status", "message": "Running baseline equilibrium simulation across CPU cores..."})
 
             baseline = await loop.run_in_executor(
@@ -363,8 +371,15 @@ async def stream_optimization(
                     "elapsed_sec": round(elapsed, 1)
                 })
 
-            # Evaluate candidates concurrently across all CPU worker processes
+            # Evaluate candidates concurrently across all CPU worker threads
             await asyncio.gather(*(eval_job(j, e, x) for j, e, x in candidate_jobs))
+
+            # Deduplicate recommendations by edge_id so each edge appears at most once
+            rec_by_edge = {}
+            for r in recommendations:
+                if r.edge_id not in rec_by_edge or r.travel_time_reduction_pct > rec_by_edge[r.edge_id].travel_time_reduction_pct:
+                    rec_by_edge[r.edge_id] = r
+            recommendations = list(rec_by_edge.values())
 
             recommendations.sort(key=lambda r: r.travel_time_reduction_pct, reverse=True)
             for idx, rec in enumerate(recommendations, start=1):
@@ -416,6 +431,8 @@ async def stream_optimization(
             await queue.put({"type": "complete", "result": final_result.model_dump()})
         except Exception as err:
             await queue.put({"type": "error", "message": str(err)})
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
 
     async def event_generator():
         task = asyncio.create_task(run_optimizer_pipeline())

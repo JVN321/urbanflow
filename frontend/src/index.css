@@ -899,4 +899,69 @@ details summary { cursor: pointer; color: var(--text-primary); font-weight: 700;
   gap: 4px;
 }
 
+/* Priority Button Group for Step 3 Combining */
+.priority-btn-group {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin: 4px 0 6px 0;
+}
+
+.priority-btn {
+  font-size: 0.72rem;
+  padding: 6px 8px;
+  font-weight: 600;
+  border: 1px solid var(--border-color);
+  background: #ffffff;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  transition: all 0.15s ease;
+}
+
+.priority-btn:hover {
+  background: #f8fafc;
+  color: var(--text-primary);
+  border-color: #cbd5e1;
+}
+
+.priority-btn.active.closing {
+  background: #fef2f2;
+  color: #dc2626;
+  border-color: #f87171;
+  box-shadow: 0 1px 3px rgba(220, 38, 38, 0.12);
+}
+
+.priority-btn.active.widening {
+  background: #ecfdf5;
+  color: #059669;
+  border-color: #34d399;
+  box-shadow: 0 1px 3px rgba(5, 150, 105, 0.12);
+}
+
+/* Recommendation Card Interactivity */
+.recommendation-card {
+  padding: 6px 8px;
+  background: #ffffff;
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border-radius: 4px;
+}
+
+.recommendation-card:hover {
+  background: #f8fafc;
+  border-color: #94a3b8;
+  transform: translateY(-1px);
+}
+
+.recommendation-card.selected-rec {
+  background: #f0f9ff !important;
+  border-color: #0284c7 !important;
+  box-shadow: 0 1px 4px rgba(2, 132, 199, 0.2);
+}
+
 

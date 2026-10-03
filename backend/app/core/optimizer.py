@@ -144,9 +144,14 @@ def select_corridor_candidates(
         seen_edges.add(edge.id)
 
     # 2. Candidate Widenings on Top Bottlenecks (Capacity Expansion)
-    # Widenings are tested on severe bottlenecks regardless of road class
-    top_bottlenecks = [b for b in baseline.bottlenecks if b.vc_ratio >= 0.70][:max_widenings]
+    # Widenings are tested on severe bottlenecks; deduplicated so no edge has both CLOSE and WIDEN
+    top_bottlenecks = [b for b in baseline.bottlenecks if b.vc_ratio >= 0.70]
+    widen_count = 0
     for b in top_bottlenecks:
+        if widen_count >= max_widenings:
+            break
+        if b.edge_id in seen_edges:
+            continue
         edge = next((e for e in base_graph.edges if e.id == b.edge_id), None)
         if not edge:
             continue
@@ -160,6 +165,7 @@ def select_corridor_candidates(
         )
         tasks.append((widen_action, "WIDEN_ROAD", {"edge": edge}))
         seen_edges.add(edge.id)
+        widen_count += 1
 
     return tasks
 
@@ -199,10 +205,11 @@ def optimize_traffic_network(
     recommendations: List[OptimizerRecommendation] = []
     coupled_actions_pool: List[InterventionAction] = []
 
-    # 3. Parallel Candidate Simulation via ProcessPoolExecutor (Multi-Core)
+    # 3. Parallel Candidate Simulation via ThreadPoolExecutor (Multi-Core without spawning python processes)
     if candidate_tasks:
         worker_count = min(OPTIMIZER_WORKERS, len(candidate_tasks))
-        with ProcessPoolExecutor(max_workers=worker_count) as executor:
+        executor = ThreadPoolExecutor(max_workers=worker_count)
+        try:
             futures = [
                 executor.submit(
                     _eval_single_action,
@@ -276,6 +283,15 @@ def optimize_traffic_network(
                         is_braess_fix=is_removal,
                         explanation=explanation
                     ))
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+    # Deduplicate recommendations so each edge appears at most once (keep highest reduction pct)
+    rec_by_edge: Dict[str, OptimizerRecommendation] = {}
+    for r in recommendations:
+        if r.edge_id not in rec_by_edge or r.travel_time_reduction_pct > rec_by_edge[r.edge_id].travel_time_reduction_pct:
+            rec_by_edge[r.edge_id] = r
+    recommendations = list(rec_by_edge.values())
 
     # Sort recommendations by travel time reduction percentage (descending)
     recommendations.sort(key=lambda r: r.travel_time_reduction_pct, reverse=True)

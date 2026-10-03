@@ -171,8 +171,30 @@ export default function App() {
   const optimizationStartTimeRef = useRef<number>(0);
   const masterGraphRef = useRef<UrbanFlowGraph | null>(null);
 
-  const [simulationEta, setSimulationEta] = useState<number | null>(null);
-  const [optimizationEta, setOptimizationEta] = useState<number | null>(null);
+  const [displaySimulationEta, setDisplaySimulationEta] = useState<number | null>(null);
+  const [displayOptimizationEta, setDisplayOptimizationEta] = useState<number | null>(null);
+
+  // Smooth real-time ETA countdown timer ticking every 100ms
+  useEffect(() => {
+    if (!loading && !optimizing) return;
+    const interval = setInterval(() => {
+      if (loading) {
+        setDisplaySimulationEta((prev) => {
+          if (prev === null) return null;
+          if (prev <= 0.1) return 0.1;
+          return Number((prev - 0.1).toFixed(1));
+        });
+      }
+      if (optimizing) {
+        setDisplayOptimizationEta((prev) => {
+          if (prev === null) return null;
+          if (prev <= 0.1) return 0.1;
+          return Number((prev - 0.1).toFixed(1));
+        });
+      }
+    }, 100);
+    return () => clearInterval(interval);
+  }, [loading, optimizing]);
 
   const filterGraphByDensity = (sourceGraph: UrbanFlowGraph, density: number): UrbanFlowGraph => {
     if (density >= 0.98) return sourceGraph;
@@ -259,7 +281,7 @@ export default function App() {
     stopStream.current?.();
     setLoading(true);
     setProgress(null);
-    setSimulationEta(null);
+    setDisplaySimulationEta(null);
     setError(null);
     simulationStartTimeRef.current = Date.now();
 
@@ -270,27 +292,27 @@ export default function App() {
       (event) => {
         setProgress(event);
         const elapsed = (Date.now() - simulationStartTimeRef.current) / 1000;
+        let calculatedEta = 0;
         if (event.eta_sec !== undefined && event.eta_sec !== null) {
-          setSimulationEta(event.eta_sec);
+          calculatedEta = event.eta_sec;
         } else if (event.iteration > 0 && event.max_iterations > event.iteration) {
           const rem = (elapsed / event.iteration) * (event.max_iterations - event.iteration);
-          setSimulationEta(Math.max(0.1, Math.round(rem * 10) / 10));
-        } else {
-          setSimulationEta(0);
+          calculatedEta = Math.max(0.1, Math.round(rem * 10) / 10);
         }
+        setDisplaySimulationEta(calculatedEta);
       },
       (result) => {
         setSimulation(result);
         setBaselineSimulation((prev) => prev ?? result);
         setLoading(false);
         setProgress(null);
-        setSimulationEta(null);
+        setDisplaySimulationEta(null);
       },
       (streamError) => {
         setError(streamError.message);
         setLoading(false);
         setProgress(null);
-        setSimulationEta(null);
+        setDisplaySimulationEta(null);
       },
       roadDensity
     );
@@ -367,7 +389,7 @@ export default function App() {
     stopStream.current?.();
     setLoading(true);
     setProgress(null);
-    setSimulationEta(null);
+    setDisplaySimulationEta(null);
     setError(null);
     simulationStartTimeRef.current = Date.now();
 
@@ -378,27 +400,27 @@ export default function App() {
       (event) => {
         setProgress(event);
         const elapsed = (Date.now() - simulationStartTimeRef.current) / 1000;
+        let calculatedEta = 0;
         if (event.eta_sec !== undefined && event.eta_sec !== null) {
-          setSimulationEta(event.eta_sec);
+          calculatedEta = event.eta_sec;
         } else if (event.iteration > 0 && event.max_iterations > event.iteration) {
           const rem = (elapsed / event.iteration) * (event.max_iterations - event.iteration);
-          setSimulationEta(Math.max(0.1, Math.round(rem * 10) / 10));
-        } else {
-          setSimulationEta(0);
+          calculatedEta = Math.max(0.1, Math.round(rem * 10) / 10);
         }
+        setDisplaySimulationEta(calculatedEta);
       },
       (result) => {
         setSimulation(result);
         setBaselineSimulation(result);
         setLoading(false);
         setProgress(null);
-        setSimulationEta(null);
+        setDisplaySimulationEta(null);
       },
       (streamError) => {
         setError(streamError.message);
         setLoading(false);
         setProgress(null);
-        setSimulationEta(null);
+        setDisplaySimulationEta(null);
       },
       roadDensity
     );
@@ -873,7 +895,7 @@ export default function App() {
     setOptimizing(true);
     setError(null);
     optimizationStartTimeRef.current = Date.now();
-    setOptimizationEta(null);
+    setDisplayOptimizationEta(null);
     setOptimizationProgress({ current: 0, total: optSettings.max_candidates });
 
     stopOptimizer.current = startOptimizationStream(
@@ -892,7 +914,8 @@ export default function App() {
           const elapsed = (Date.now() - optimizationStartTimeRef.current) / 1000;
           eta = Math.max(0, (elapsed / event.current) * (event.total - event.current));
         }
-        setOptimizationEta(eta !== null ? Number(eta.toFixed(1)) : null);
+        const roundedEta = eta !== null ? Number(eta.toFixed(1)) : null;
+        setDisplayOptimizationEta(roundedEta);
         setOptimizationProgress({
           current: event.current,
           total: event.total,
@@ -904,12 +927,12 @@ export default function App() {
       (result) => {
         setOptimization(result);
         setOptimizing(false);
-        setOptimizationEta(null);
+        setDisplayOptimizationEta(null);
       },
       (optimizerError: Error) => {
         setError(optimizerError.message);
         setOptimizing(false);
-        setOptimizationEta(null);
+        setDisplayOptimizationEta(null);
       },
       {
         max_candidates: optSettings.max_candidates,
@@ -931,7 +954,19 @@ export default function App() {
     return result;
   };
 
-  const recommendations = optimization?.recommendations || discoveredRecommendations;
+  // Deduplicate recommendations by edge_id so each edge has at most one dominant recommendation
+  const rawRecommendations = optimization?.recommendations || discoveredRecommendations;
+  const recommendations = rawRecommendations.reduce<OptimizationResult['recommendations']>((acc, curr) => {
+    const existing = acc.find((r) => r.edge_id === curr.edge_id);
+    if (!existing) {
+      acc.push(curr);
+    } else if (curr.travel_time_reduction_pct > existing.travel_time_reduction_pct) {
+      const idx = acc.indexOf(existing);
+      acc[idx] = curr;
+    }
+    return acc;
+  }, []);
+
   const closeRecommendations = recommendations.filter((r) => r.type === 'REMOVE_ROAD' || r.action.action === 'CLOSE');
   const widenRecommendations = recommendations.filter((r) => r.type === 'WIDEN_ROAD' || r.action.action === 'WIDEN');
   interface ScenarioResult {
@@ -943,7 +978,27 @@ export default function App() {
   const [combinedResult, setCombinedResult] = useState<ScenarioResult | null>(null);
   const [activeScenarioMode, setActiveScenarioMode] = useState<'baseline' | 'closings' | 'widenings' | 'combined'>('baseline');
   const [activeStepRunning, setActiveStepRunning] = useState<'baseline' | 'closings' | 'widenings' | 'combined' | null>(null);
+  const [combinationPriority, setCombinationPriority] = useState<'closing' | 'widening'>('closing');
   const [configPresetSaved, setConfigPresetSaved] = useState(false);
+
+  // Generates combined operations without conflicting actions on the same road
+  const getCombinedActions = (priority: 'closing' | 'widening' = combinationPriority): InterventionAction[] => {
+    if (priority === 'closing') {
+      const closeEdgeIds = new Set(closeRecommendations.map((r) => r.edge_id));
+      const nonConflictingWiden = widenRecommendations.filter((r) => !closeEdgeIds.has(r.edge_id));
+      return deduplicateActions([
+        ...closeRecommendations.map((r) => r.action),
+        ...nonConflictingWiden.map((r) => r.action)
+      ]);
+    } else {
+      const widenEdgeIds = new Set(widenRecommendations.map((r) => r.edge_id));
+      const nonConflictingClose = closeRecommendations.filter((r) => !widenEdgeIds.has(r.edge_id));
+      return deduplicateActions([
+        ...widenRecommendations.map((r) => r.action),
+        ...nonConflictingClose.map((r) => r.action)
+      ]);
+    }
+  };
 
   const saveConfigPreset = () => {
     try {
@@ -1042,11 +1097,11 @@ export default function App() {
     }
   };
 
-  const runAllOperationsStep = async () => {
+  const runCombinedOperations = async (priority: 'closing' | 'widening' = combinationPriority) => {
     if (!graph || recommendations.length === 0) return;
-    const actions = optimization?.optimal_combined_actions?.length
-      ? optimization.optimal_combined_actions
-      : deduplicateActions(recommendations.map((r) => r.action));
+    setCombinationPriority(priority);
+    const actions = getCombinedActions(priority);
+    if (actions.length === 0) return;
     setActiveStepRunning('combined');
     setLoading(true);
     setError(null);
@@ -1489,7 +1544,7 @@ export default function App() {
                     <span><strong>Simulating Baseline:</strong> Iteration {progress.iteration} / {progress.max_iterations}</span>
                     <strong>
                       {Math.round((progress.iteration / progress.max_iterations) * 100)}%
-                      {simulationEta !== null && <span style={{ marginLeft: '6px', color: '#0284c7' }}>ETA: {simulationEta}s</span>}
+                      {displaySimulationEta !== null && <span style={{ marginLeft: '6px', color: '#0284c7' }}>ETA: {displaySimulationEta.toFixed(1)}s</span>}
                     </strong>
                   </div>
                   <div className="progress-bar-track">
@@ -1555,7 +1610,7 @@ export default function App() {
                     <span><strong>Evaluating Candidates:</strong> {optimizationProgress.current} / {optimizationProgress.total || '...'}</span>
                     <strong>
                       {optimizationProgress.total > 0 ? `${Math.round((optimizationProgress.current / optimizationProgress.total) * 100)}%` : '0%'}
-                      {optimizationEta !== null && <span style={{ marginLeft: '6px', color: '#8b5cf6' }}>ETA: {optimizationEta}s</span>}
+                      {displayOptimizationEta !== null && <span style={{ marginLeft: '6px', color: '#8b5cf6' }}>ETA: {displayOptimizationEta.toFixed(1)}s</span>}
                     </strong>
                   </div>
                   <div className="progress-bar-track">
@@ -1577,18 +1632,45 @@ export default function App() {
 
               {/* Optimizer Discovered Recommendations Summary */}
               {recommendations.length > 0 ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '160px', overflowY: 'auto' }}>
-                  {recommendations.map((rec) => (
-                    <div className="recommendation" key={rec.edge_id} style={{ padding: '6px', background: '#ffffff', border: '1px solid var(--border-color)' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <strong style={{ fontSize: '0.78rem' }}>{rec.type === 'REMOVE_ROAD' ? '🚫 Close' : '➕ Widen'} {rec.edge_name}</strong>
-                        <span style={{ color: '#059669', fontWeight: 700 }}>-{rec.travel_time_reduction_pct}%</span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '180px', overflowY: 'auto' }}>
+                  {recommendations.map((rec) => {
+                    const isSelected = selectedEdgeId === rec.edge_id;
+                    return (
+                      <div
+                        className={`recommendation-card ${isSelected ? 'selected-rec' : ''}`}
+                        key={rec.edge_id}
+                        onClick={() => {
+                          setSelectedEdgeId(rec.edge_id);
+                          const targetEdge = graph?.edges.find((e) => e.id === rec.edge_id);
+                          if (targetEdge && mapInstance.current) {
+                            const pts = edgePath(graph!, targetEdge);
+                            if (pts.length > 0) {
+                              const mid = getEdgeMidpoint(pts);
+                              mapInstance.current.setView(mid, Math.max(mapInstance.current.getZoom(), 15));
+                            }
+                          }
+                        }}
+                        title="Click to view and inspect this corridor on map"
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <strong style={{ fontSize: '0.78rem', color: isSelected ? '#0284c7' : 'inherit' }}>
+                            {rec.type === 'REMOVE_ROAD' ? '🚫 Close' : '➕ Widen'} {rec.edge_name}
+                          </strong>
+                          <span style={{ color: '#059669', fontWeight: 700 }}>-{rec.travel_time_reduction_pct}%</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '2px' }}>
+                          <span style={{ color: '#64748b', fontSize: '0.72rem' }}>
+                            {rec.avg_travel_time_before_mins}m ➔ {rec.avg_travel_time_after_mins}m
+                          </span>
+                          {isSelected && (
+                            <span style={{ fontSize: '0.68rem', color: '#0284c7', fontWeight: 700 }}>
+                              Selected Road ➔
+                            </span>
+                          )}
+                        </div>
                       </div>
-                      <span style={{ color: '#64748b', fontSize: '0.72rem' }}>
-                        {rec.avg_travel_time_before_mins}m ➔ {rec.avg_travel_time_after_mins}m
-                      </span>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : !optimizing ? (
                 <p className="muted" style={{ padding: '2px 0' }}>
@@ -1606,7 +1688,7 @@ export default function App() {
               </span>
             </div>
             <div className="step-card-body">
-              {/* 3 Step Buttons (Fixed Sizes) */}
+              {/* Step 3 Action Buttons */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 <button
                   className="btn step-action-btn"
@@ -1628,21 +1710,51 @@ export default function App() {
                   ➕ Simulate Widenings Only ({widenRecommendations.length})
                 </button>
 
-                <button
-                  className="btn btn-primary step-action-btn"
-                  onClick={runAllOperationsStep}
-                  disabled={loading || optimizing || recommendations.length === 0}
-                  title="Simulate ALL recommended operations combined (non-stacking)"
-                >
-                  ⚡ Simulate All Operations ({recommendations.length})
-                </button>
+                {/* Priority Selection for Combining Operations */}
+                <div style={{ marginTop: '2px', borderTop: '1px solid #f1f5f9', paddingTop: '4px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '3px' }}>
+                    <span style={{ fontSize: '0.71rem', color: '#475569', fontWeight: 600 }}>Combining Priority:</span>
+                    <span style={{ fontSize: '0.68rem', color: '#64748b' }}>
+                      {combinationPriority === 'closing' ? '🚫 Closures First' : '➕ Widenings First'}
+                    </span>
+                  </div>
+                  <div className="priority-btn-group">
+                    <button
+                      className={`priority-btn ${combinationPriority === 'closing' ? 'active closing' : ''}`}
+                      onClick={() => setCombinationPriority('closing')}
+                      title="Prioritize road closures: removes Braess shortcuts and includes non-conflicting widenings"
+                    >
+                      🚫 Closing Priority
+                    </button>
+                    <button
+                      className={`priority-btn ${combinationPriority === 'widening' ? 'active widening' : ''}`}
+                      onClick={() => setCombinationPriority('widening')}
+                      title="Prioritize road widenings: expands bottlenecks and includes non-conflicting closures"
+                    >
+                      ➕ Widening Priority
+                    </button>
+                  </div>
+
+                  <button
+                    className="btn btn-primary step-action-btn"
+                    onClick={() => runCombinedOperations(combinationPriority)}
+                    disabled={loading || optimizing || getCombinedActions(combinationPriority).length === 0}
+                    title="Simulate all combined operations in parallel across CPU cores instantly"
+                  >
+                    ⚡ Simulate Combined Operations ({getCombinedActions(combinationPriority).length})
+                  </button>
+                </div>
               </div>
 
               {/* Step 3 Simulating Indicator */}
               {(activeStepRunning === 'closings' || activeStepRunning === 'widenings' || activeStepRunning === 'combined') && (
                 <div className="optimizer-progress-box" style={{ borderLeft: '3px solid #0284c7' }}>
                   <div className="progress-label-row">
-                    <span><strong>Simulating {activeStepRunning === 'closings' ? 'Closings' : activeStepRunning === 'widenings' ? 'Widenings' : 'All Operations'}...</strong></span>
+                    <span>
+                      <strong>
+                        Simulating {activeStepRunning === 'closings' ? 'Closings Only' : activeStepRunning === 'widenings' ? 'Widenings Only' : `Combined (${combinationPriority === 'closing' ? 'Closing Priority' : 'Widening Priority'})`}...
+                      </strong>
+                    </span>
                   </div>
                 </div>
               )}
@@ -1757,7 +1869,7 @@ export default function App() {
                 <div className={`scenario-card ${activeScenarioMode === 'combined' ? 'active-map-view' : ''}`}>
                   <div className="scenario-card-header">
                     <span className="scenario-card-title" style={{ color: '#0284c7' }}>
-                      ⚡ Section 3: All Operations (Combined)
+                      ⚡ Section 3: Combined ({combinationPriority === 'closing' ? 'Closing Priority' : 'Widening Priority'})
                     </span>
                     {combinedResult && (
                       <button
