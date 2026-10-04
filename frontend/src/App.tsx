@@ -89,6 +89,34 @@ function getEdgeMidpoint(points: L.LatLngExpression[]): L.LatLng {
   return latLngs[Math.floor(latLngs.length / 2)];
 }
 
+function getEdgeBearingAndDirection(points: L.LatLngExpression[]): { bearing: number; cardinal: string; desc: string } {
+  if (points.length < 2) return { bearing: 0, cardinal: 'NB', desc: 'Northbound' };
+  const toLatLng = (p: L.LatLngExpression): L.LatLng => {
+    if (Array.isArray(p)) return L.latLng(p[0], p[1]);
+    return L.latLng(p as L.LatLngLiteral);
+  };
+  const pStart = toLatLng(points[0]);
+  const pEnd = toLatLng(points[points.length - 1]);
+  const dLng = ((pEnd.lng - pStart.lng) * Math.PI) / 180;
+  const phi1 = (pStart.lat * Math.PI) / 180;
+  const phi2 = (pEnd.lat * Math.PI) / 180;
+  const y = Math.sin(dLng) * Math.cos(phi2);
+  const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLng);
+  const brng = ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+  const cardinals = [
+    { card: 'NB', desc: 'Northbound' },
+    { card: 'NEB', desc: 'Northeastbound' },
+    { card: 'EB', desc: 'Eastbound' },
+    { card: 'SEB', desc: 'Southeastbound' },
+    { card: 'SB', desc: 'Southbound' },
+    { card: 'SWB', desc: 'Southwestbound' },
+    { card: 'WB', desc: 'Westbound' },
+    { card: 'NWB', desc: 'Northwestbound' }
+  ];
+  const idx = Math.round(brng / 45) % 8;
+  return { bearing: Math.round(brng), cardinal: cardinals[idx].card, desc: cardinals[idx].desc };
+}
+
 export default function App() {
   const [selectedScenario, setSelectedScenario] = useState<string>('kochi_central');
   const [graph, setGraph] = useState<UrbanFlowGraph | null>(null);
@@ -106,6 +134,7 @@ export default function App() {
     name?: string;
     action_type?: string;
   }>({ current: 0, total: 0 });
+  const [recommendationOverrides, setRecommendationOverrides] = useState<Record<string, string>>({});
 
   // Map & Visual States
   const [showNames, setShowNames] = useState(true);
@@ -685,10 +714,15 @@ export default function App() {
         bubblingMouseEvents: true
       });
 
+      // Direction & Bearing computation for one-way flows
+      const isOneWayFlow = oneWay || recommendation?.type === 'MAKE_ONE_WAY';
+      const dirInfo = points.length >= 2 ? getEdgeBearingAndDirection(points) : null;
+
       // Tooltip with detailed traffic flow and time saved
       let tooltipContent = `<strong>${edge.name || edge.id}</strong><br>${edge.source} ➔ ${edge.target}<br>Flow: ${Math.round(volume).toLocaleString()} vph | Capacity: ${edge.capacity_vph.toLocaleString()} vph<br>Time: ${currentTimeMins.toFixed(1)} min (V/C: ${vc.toFixed(2)})`;
       if (oneWay) {
-        tooltipContent += `<br><span style="color: #7c3aed; font-weight: bold;">➡️ CONVERTED TO ONE-WAY CORRIDOR</span>`;
+        const dirStr = dirInfo ? `${dirInfo.desc}: ${edge.source} ➔ ${edge.target}` : `${edge.source} ➔ ${edge.target}`;
+        tooltipContent += `<br><span style="color: #7c3aed; font-weight: bold;">➡️ CONVERTED TO ONE-WAY (${dirStr})</span>`;
       } else if (closed) {
         tooltipContent += `<br><span style="color: #64748b; font-weight: bold;">🚫 ROAD BLOCKED / CLOSED</span>`;
       } else if (widened) {
@@ -698,7 +732,8 @@ export default function App() {
         tooltipContent += `<br><span style="color: ${timeSavedMins > 0 ? '#059669' : '#dc2626'}; font-weight: bold;">${timeSavedMins > 0 ? `⚡ Time Saved: -${timeSavedMins.toFixed(1)} min` : `⚠️ Delay: +${Math.abs(timeSavedMins).toFixed(1)} min`}</span>`;
       }
       if (recommendation) {
-        const recTypeLabel = recommendation.type === 'MAKE_ONE_WAY' ? '➡️ Proposed One-Way (Braess Fix)' : recommendation.type === 'REMOVE_ROAD' ? '🚫 Proposed Closure' : '➕ Proposed Expansion';
+        const dirSub = dirInfo ? ` (${dirInfo.desc}: ${edge.source} ➔ ${edge.target})` : '';
+        const recTypeLabel = recommendation.type === 'MAKE_ONE_WAY' ? `➡️ Proposed One-Way${dirSub}` : recommendation.type === 'REMOVE_ROAD' ? '🚫 Proposed Closure' : '➕ Proposed Expansion';
         const recColor = recommendation.type === 'MAKE_ONE_WAY' ? '#8b5cf6' : recommendation.type === 'REMOVE_ROAD' ? '#f59e0b' : '#06b6d4';
         tooltipContent += `<br><strong style="color: ${recColor};">⚡ Optimizer: ${recTypeLabel} (-${recommendation.travel_time_reduction_pct}% latency)</strong>`;
       }
@@ -710,6 +745,22 @@ export default function App() {
       line.on('click', () => setSelectedEdgeId(edge.id));
       line.addTo(layers);
 
+      // Render Directional Flow Arrow Marker for One-Way Streets
+      if (isOneWayFlow && dirInfo && points.length >= 2) {
+        const arrowMid = getEdgeMidpoint(points);
+        const arrowColor = oneWay ? '#7c3aed' : '#8b5cf6';
+        const arrowMarker = L.marker(arrowMid, {
+          icon: L.divIcon({
+            className: 'oneway-flow-arrow',
+            html: `<div style="transform: rotate(${dirInfo.bearing}deg); font-size: 16px; font-weight: 900; line-height: 1; color: ${arrowColor}; text-shadow: 0 0 3px #ffffff, 0 0 6px #ffffff, 0 0 10px ${arrowColor}; pointer-events: none;">▲</div>`,
+            iconSize: [20, 20],
+            iconAnchor: [10, 10]
+          }),
+          interactive: false
+        });
+        arrowMarker.addTo(layers);
+      }
+
       // On-Graph Badge / On-Path Route Travel Time & Time Saved Label
       if (showLabels && points.length >= 2) {
         const midLatLng = getEdgeMidpoint(points);
@@ -717,7 +768,7 @@ export default function App() {
         let isRec = false;
 
         if (oneWay) {
-          badgeHtml = `<div class="on-graph-badge badge-oneway">➡️ ONE-WAY</div>`;
+          badgeHtml = `<div class="on-graph-badge badge-oneway">➡️ ONE-WAY (${dirInfo?.cardinal || ''})</div>`;
         } else if (closed) {
           badgeHtml = `<div class="on-graph-badge badge-closed">🚫 CLOSED</div>`;
         } else if (widened) {
@@ -725,7 +776,7 @@ export default function App() {
         } else if (recommendation) {
           isRec = true;
           if (recommendation.type === 'MAKE_ONE_WAY') {
-            badgeHtml = `<div class="on-graph-badge badge-oneway" title="Click to convert to one-way">➡️ ONE-WAY -${recommendation.travel_time_reduction_pct.toFixed(0)}%</div>`;
+            badgeHtml = `<div class="on-graph-badge badge-oneway" title="Click to convert to one-way">➡️ ONE-WAY (${dirInfo?.cardinal || ''}) -${recommendation.travel_time_reduction_pct.toFixed(0)}%</div>`;
           } else if (recommendation.type === 'REMOVE_ROAD') {
             badgeHtml = `<div class="on-graph-badge badge-remove" title="Click to apply this road closure">🚫 BLOCK -${recommendation.travel_time_reduction_pct.toFixed(0)}%</div>`;
           } else {
@@ -983,15 +1034,38 @@ export default function App() {
   // Deduplicate recommendations by edge_id so each edge has at most one dominant recommendation
   const rawRecommendations = optimization?.recommendations || discoveredRecommendations;
   const recommendations = rawRecommendations.reduce<OptimizationResult['recommendations']>((acc, curr) => {
-    const existing = acc.find((r) => r.edge_id === curr.edge_id);
+    const effectiveEdgeId = recommendationOverrides[curr.edge_id] || curr.edge_id;
+    const effectiveEdge = graph?.edges.find((e) => e.id === effectiveEdgeId);
+    const updatedCurr = effectiveEdgeId !== curr.edge_id && effectiveEdge ? {
+      ...curr,
+      edge_id: effectiveEdgeId,
+      edge_name: effectiveEdge.name || curr.edge_name,
+      action: { ...curr.action, edge_id: effectiveEdgeId }
+    } : curr;
+
+    const existing = acc.find((r) => r.edge_id === updatedCurr.edge_id);
     if (!existing) {
-      acc.push(curr);
-    } else if (curr.travel_time_reduction_pct > existing.travel_time_reduction_pct) {
+      acc.push(updatedCurr);
+    } else if (updatedCurr.travel_time_reduction_pct > existing.travel_time_reduction_pct) {
       const idx = acc.indexOf(existing);
-      acc[idx] = curr;
+      acc[idx] = updatedCurr;
     }
     return acc;
   }, []);
+
+  const flipRecommendationDirection = (edgeId: string) => {
+    const currentTargetId = recommendationOverrides[edgeId] || edgeId;
+    const currentEdge = graph?.edges.find((e) => e.id === currentTargetId);
+    if (!currentEdge) return;
+    const opp = graph?.edges.find((e) => e.source === currentEdge.target && e.target === currentEdge.source);
+    if (!opp) return;
+
+    setRecommendationOverrides((prev) => ({
+      ...prev,
+      [edgeId]: opp.id
+    }));
+    focusEdgeOnMap(opp.id);
+  };
 
   const onewayRecommendations = recommendations.filter((r) => r.type === 'MAKE_ONE_WAY' || r.type === 'REMOVE_ROAD' || r.action.action === 'ONE_WAY' || r.action.action === 'CLOSE');
   const widenRecommendations = recommendations.filter((r) => r.type === 'WIDEN_ROAD' || r.action.action === 'WIDEN');
@@ -1181,7 +1255,8 @@ export default function App() {
     const edge = graph?.edges.find((e) => e.id === action.edge_id);
     const edgeName = edge?.name || action.edge_id;
     if (action.action === 'ONE_WAY') {
-      return `➡️ One-Way: ${edgeName}`;
+      const endpoints = edge ? ` (${edge.source} ➔ ${edge.target})` : '';
+      return `➡️ One-Way: ${edgeName}${endpoints}`;
     }
     if (action.action === 'CLOSE') {
       return `🚫 Close ${edgeName}`;
@@ -1193,7 +1268,11 @@ export default function App() {
   };
 
   const getRecChange = (rec: OptimizerRecommendation) => {
-    if (rec.type === 'MAKE_ONE_WAY') return 'Convert to 1-way (flow forward, +40% fwd capacity)';
+    if (rec.type === 'MAKE_ONE_WAY') {
+      const edge = graph?.edges.find((e) => e.id === rec.edge_id);
+      const dirText = edge ? ` (${edge.source} ➔ ${edge.target})` : '';
+      return `Convert to 1-way${dirText}: forward flow only, +40% capacity`;
+    }
     if (rec.type === 'REMOVE_ROAD') return 'Close corridor shortcut to eliminate conflicts';
     return 'Add +1 travel lane (capacity expanded to 1.5×)';
   };
@@ -1228,16 +1307,30 @@ export default function App() {
     });
   };
 
-  const isSelectedOneWay = selectedEdge ? interventions.filter((action) => action.edge_id === selectedEdge.id).slice(-1)[0]?.action === 'ONE_WAY' : false;
-  const isSelectedClosed = selectedEdge ? interventions.filter((action) => action.edge_id === selectedEdge.id).slice(-1)[0]?.action === 'CLOSE' : false;
+  const opposingEdge = graph?.edges.find(
+    (e) => selectedEdge && e.source === selectedEdge.target && e.target === selectedEdge.source
+  );
+  const isForwardOneWay = selectedEdge ? interventions.some((a) => a.action === 'ONE_WAY' && a.edge_id === selectedEdge.id) : false;
+  const isReverseOneWay = opposingEdge ? interventions.some((a) => a.action === 'ONE_WAY' && a.edge_id === opposingEdge.id) : false;
+  const isSelectedOneWay = isForwardOneWay || isReverseOneWay;
+  const isSelectedClosed = selectedEdge ? interventions.some((a) => a.action === 'CLOSE' && a.edge_id === selectedEdge.id) : false;
 
-  const toggleOneWay = () => {
+  const setOneWayDirection = (direction: 'forward' | 'reverse') => {
     if (!selectedEdge) return;
-    if (isSelectedOneWay) {
-      applyActions(interventions.filter((a) => a.edge_id !== selectedEdge.id));
-    } else {
-      applyActions([...interventions.filter((a) => a.edge_id !== selectedEdge.id), { action: 'ONE_WAY', edge_id: selectedEdge.id }]);
-    }
+    const targetEdgeId = direction === 'forward' ? selectedEdge.id : (opposingEdge?.id || selectedEdge.id);
+    const cleaned = interventions.filter(
+      (a) => a.edge_id !== selectedEdge.id && (!opposingEdge || a.edge_id !== opposingEdge.id)
+    );
+    applyActions([...cleaned, { action: 'ONE_WAY', edge_id: targetEdgeId }]);
+  };
+
+  const revertOneWay = () => {
+    if (!selectedEdge) return;
+    applyActions(
+      interventions.filter(
+        (a) => a.edge_id !== selectedEdge.id && (!opposingEdge || a.edge_id !== opposingEdge.id)
+      )
+    );
   };
 
   const widen = () => selectedEdge && applyActions([...interventions, { action: 'WIDEN', edge_id: selectedEdge.id, new_lanes: selectedEdge.lanes + 1, new_capacity_vph: selectedEdge.capacity_vph * 1.5 }]);
@@ -1248,6 +1341,7 @@ export default function App() {
     setOnewayResult(null);
     setWideningsResult(null);
     setCombinedResult(null);
+    setRecommendationOverrides({});
     setActiveScenarioMode('baseline');
     if (graph) runLiveSimulation(graph.graph_id);
   };
@@ -1467,6 +1561,16 @@ export default function App() {
                     <span>Corridor Endpoints</span>
                     <b>{selectedEdge.source} ➔ {selectedEdge.target}</b>
                   </div>
+                  {isSelectedOneWay && (
+                    <div className="inspector-meta-row" style={{ background: '#f5f3ff', padding: '5px 8px', borderRadius: '4px', border: '1px solid #ddd6fe' }}>
+                      <span style={{ color: '#6d28d9', fontWeight: 600 }}>One-Way Status</span>
+                      <b style={{ color: '#6d28d9' }}>
+                        {isForwardOneWay
+                          ? `Forward Only: ${selectedEdge.source} ➔ ${selectedEdge.target} (Reverse closed)`
+                          : `Reverse Only: ${selectedEdge.target} ➔ ${selectedEdge.source} (Forward closed)`}
+                      </b>
+                    </div>
+                  )}
                   <div className="inspector-meta-row">
                     <span>Road Type</span>
                     <b>{selectedEdge.road_type || 'tertiary'}</b>
@@ -1498,16 +1602,53 @@ export default function App() {
                     </b>
                   </div>
 
-                  <div className="button-row" style={{ marginTop: '6px' }}>
-                    <button
-                      className={`btn btn-sm ${isSelectedOneWay ? 'btn-primary' : ''}`}
-                      style={{ borderLeft: '3px solid #7c3aed' }}
-                      onClick={toggleOneWay}
-                      disabled={loading}
-                      title="Convert this corridor to a one-way street (avoids road closures while eliminating Braess counter-flow)"
-                    >
-                      ➡️ {isSelectedOneWay ? 'Revert One-Way' : 'Make One-Way'}
-                    </button>
+                  <div style={{ marginTop: '8px', borderTop: '1px solid #e2e8f0', paddingTop: '8px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '5px' }}>
+                      <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#475569' }}>
+                        Convert to One-Way Corridor:
+                      </span>
+                      {isSelectedOneWay && (
+                        <span style={{ fontSize: '0.63rem', background: '#ede9fe', color: '#7c3aed', padding: '1px 5px', borderRadius: '3px', fontWeight: 700 }}>
+                          ONE-WAY ACTIVE
+                        </span>
+                      )}
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>
+                      <button
+                        className={`btn btn-sm ${isForwardOneWay ? 'btn-primary' : 'btn-outline'}`}
+                        style={{ fontSize: '0.68rem', padding: '4px 6px', borderLeft: isForwardOneWay ? undefined : '3px solid #7c3aed' }}
+                        onClick={() => setOneWayDirection('forward')}
+                        disabled={loading}
+                        title={`Make one-way: ${selectedEdge.source} ➔ ${selectedEdge.target}`}
+                      >
+                        {isForwardOneWay ? '✓ ' : '➡️ '} {selectedEdge.source} ➔ {selectedEdge.target}
+                      </button>
+                      <button
+                        className={`btn btn-sm ${isReverseOneWay ? 'btn-primary' : 'btn-outline'}`}
+                        style={{ fontSize: '0.68rem', padding: '4px 6px', borderLeft: isReverseOneWay ? undefined : '3px solid #7c3aed' }}
+                        onClick={() => setOneWayDirection('reverse')}
+                        disabled={loading || !opposingEdge}
+                        title={opposingEdge ? `Make one-way: ${selectedEdge.target} ➔ ${selectedEdge.source}` : 'No opposing reverse link available'}
+                      >
+                        {isReverseOneWay ? '✓ ' : '⬅️ '} {selectedEdge.target} ➔ {selectedEdge.source}
+                      </button>
+                    </div>
+
+                    {isSelectedOneWay && (
+                      <button
+                        className="btn btn-sm"
+                        style={{ marginTop: '4px', width: '100%', fontSize: '0.68rem', color: '#64748b' }}
+                        onClick={revertOneWay}
+                        disabled={loading}
+                        title="Restore two-way traffic in both directions"
+                      >
+                        ↩️ Revert to Standard Two-Way
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="button-row" style={{ marginTop: '8px' }}>
                     <button className="btn btn-success btn-sm" onClick={widen} disabled={loading} title="Add 1 additional travel lane">
                       <Plus size={12} /> Widen
                     </button>
@@ -2041,6 +2182,24 @@ export default function App() {
                           </strong>
                           <span style={{ color: '#059669', fontWeight: 700, fontSize: '0.8rem' }}>-{rec.travel_time_reduction_pct}%</span>
                         </div>
+                        {rec.type === 'MAKE_ONE_WAY' && (
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '3px' }}>
+                            <span style={{ fontSize: '0.67rem', color: '#7c3aed', fontWeight: 600 }}>
+                              Flow: {graph?.edges.find((e) => e.id === rec.edge_id)?.source} ➔ {graph?.edges.find((e) => e.id === rec.edge_id)?.target}
+                            </span>
+                            <button
+                              className="btn btn-sm"
+                              style={{ fontSize: '0.62rem', padding: '1px 6px', height: 'auto', background: '#f5f3ff', color: '#7c3aed', border: '1px solid #ddd6fe' }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                flipRecommendationDirection(rec.edge_id);
+                              }}
+                              title="Click to flip the permitted one-way travel direction"
+                            >
+                              ⇄ Flip Direction
+                            </button>
+                          </div>
+                        )}
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '3px' }}>
                           <span style={{ color: '#64748b', fontSize: '0.72rem' }}>
                             {rec.avg_travel_time_before_mins}m ➔ {rec.avg_travel_time_after_mins}m

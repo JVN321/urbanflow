@@ -1213,6 +1213,15 @@ details summary { cursor: pointer; color: var(--text-primary); font-weight: 700;
   background: #7c3aed;
 }
 
+.oneway-flow-arrow {
+  background: transparent !important;
+  border: none !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
 /* Expanded Recommendation Container for Step 2 in Right Sidebar */
 .sidebar-right-pane .step-card:last-child {
   flex: 1;

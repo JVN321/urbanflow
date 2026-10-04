@@ -1,5 +1,3 @@
-'
-
 # UrbanFlow Simulation & Optimization Engine — Mathematical Guide & Algorithm Reference
 
 ## 1. Executive Summary
