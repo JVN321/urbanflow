@@ -49,30 +49,55 @@ echo "======================================================================"
 
 # 2. Automatically Source / Activate Python Virtual Environment
 VENV_PATH=""
-if [ -d "$BACKEND_DIR/venv" ]; then
-    VENV_PATH="$BACKEND_DIR/venv"
-elif [ -d "$ROOT_DIR/venv" ]; then
-    VENV_PATH="$ROOT_DIR/venv"
-elif [ -d "$ROOT_DIR/.venv" ]; then
-    VENV_PATH="$ROOT_DIR/.venv"
-elif [ -d "$BACKEND_DIR/.venv" ]; then
-    VENV_PATH="$BACKEND_DIR/.venv"
+for candidate in "$BACKEND_DIR/venv" "$BACKEND_DIR/.venv" "$ROOT_DIR/venv" "$ROOT_DIR/.venv"; do
+    if [ -d "$candidate" ] && [ -f "$candidate/bin/activate" ]; then
+        VENV_PATH="$candidate"
+        break
+    fi
+done
+
+# If venv exists, test if its interpreter is functional
+if [ -n "$VENV_PATH" ]; then
+    if ! "$VENV_PATH/bin/python" -c "import sys" >/dev/null 2>&1; then
+        echo "⚠️ Virtual environment at $VENV_PATH appears broken or relocated. Recreating..."
+        rm -rf "$VENV_PATH"
+        VENV_PATH=""
+    fi
 fi
 
 if [ -n "$VENV_PATH" ]; then
     echo "🐍 Sourcing Python virtual environment: $VENV_PATH..."
     # shellcheck disable=SC1090
     source "$VENV_PATH/bin/activate"
+    # Ensure VIRTUAL_ENV and PATH are strictly set to this directory even if activate had stale paths
+    export VIRTUAL_ENV="$VENV_PATH"
+    export PATH="$VENV_PATH/bin:$PATH"
+    PYTHON_BIN="$VENV_PATH/bin/python"
 else
     echo "⚙️ Creating backend Python virtual environment in $BACKEND_DIR/venv..."
-    python3 -m venv "$BACKEND_DIR/venv"
+    PYTHON_SYS="python3"
+    if ! command -v "$PYTHON_SYS" &> /dev/null; then
+        PYTHON_SYS="python"
+    fi
+    "$PYTHON_SYS" -m venv "$BACKEND_DIR/venv"
+    VENV_PATH="$BACKEND_DIR/venv"
     # shellcheck disable=SC1090
-    source "$BACKEND_DIR/venv/bin/activate"
-    pip install --upgrade pip
-    pip install -r "$BACKEND_DIR/requirements.txt"
+    source "$VENV_PATH/bin/activate"
+    export VIRTUAL_ENV="$VENV_PATH"
+    export PATH="$VENV_PATH/bin:$PATH"
+    PYTHON_BIN="$VENV_PATH/bin/python"
+    echo "📦 Installing backend requirements..."
+    "$PYTHON_BIN" -m pip install --upgrade pip
+    "$PYTHON_BIN" -m pip install -r "$BACKEND_DIR/requirements.txt"
 fi
 
-echo "  Active Python: $(which python) ($(python --version 2>&1))"
+# Verify critical imports exist; auto-install if missing
+if ! "$PYTHON_BIN" -c "import fastapi, osmnx, uvicorn" >/dev/null 2>&1; then
+    echo "📦 Missing required packages in virtual environment. Installing dependencies..."
+    "$PYTHON_BIN" -m pip install -r "$BACKEND_DIR/requirements.txt"
+fi
+
+echo "  Active Python: $PYTHON_BIN ($("$PYTHON_BIN" --version 2>&1))"
 
 # 3. Detect Node Package Manager (pnpm preferred, fallback to npm)
 if command -v pnpm &> /dev/null; then
@@ -111,7 +136,7 @@ trap cleanup SIGINT SIGTERM EXIT
 # 5. Start Backend FastAPI Server
 echo "🌐 Starting Backend FastAPI Server on http://${BACKEND_HOST}:${BACKEND_PORT}..."
 cd "$BACKEND_DIR"
-PYTHONPATH="$BACKEND_DIR" uvicorn app.main:app --host "$BACKEND_HOST" --port "$BACKEND_PORT" --reload &
+PYTHONPATH="$BACKEND_DIR" "$PYTHON_BIN" -m uvicorn app.main:app --host "$BACKEND_HOST" --port "$BACKEND_PORT" --reload &
 BACKEND_PID=$!
 
 # Wait for backend health check

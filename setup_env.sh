@@ -36,8 +36,10 @@ fi
 # 3. Activate venv and install backend requirements
 echo "Installing backend dependencies from backend/requirements.txt..."
 source "$VENV_DIR/bin/activate"
-pip install --upgrade pip
-pip install -r "$PROJECT_ROOT/backend/requirements.txt"
+export VIRTUAL_ENV="$VENV_DIR"
+export PATH="$VENV_DIR/bin:$PATH"
+"$VENV_DIR/bin/python" -m pip install --upgrade pip
+"$VENV_DIR/bin/python" -m pip install -r "$PROJECT_ROOT/backend/requirements.txt"
 
 echo "✅ Backend dependencies installed successfully."
 
