@@ -1,9 +1,11 @@
 # UrbanFlow System Architecture & Collaboration Specification
 
 ## 1. System Overview
+
 **UrbanFlow** is an Urban Traffic Graph Optimization & Simulation Engine designed to model urban road networks as directed weighted graphs, simulate traffic flow and congestion using equilibrium assignment (BPR function), detect bottlenecks, and evaluate infrastructure interventions (road widening, closure, and additions) to analyze phenomena like the **Braess Paradox**.
 
 The system is split into two decoupled sub-systems:
+
 1. **Python Simulation & Optimization Engine (Backend)**: Fast mathematical graph computation, traffic assignment, bottleneck detection, and intervention benchmarking.
 2. **React + Vite Interactive Map & Analytics Dashboard (Frontend)**: Real-time map rendering, interactive network editing (interventions), congestion heatmap visualization, and comparative metric dashboards.
 
@@ -48,6 +50,7 @@ The system is split into two decoupled sub-systems:
 To ensure Person A (Frontend + Map) and Person B (Backend) can work 100% independently without blocking each other, all data exchange adheres strictly to the following JSON schemas.
 
 ### 2.1 Graph Definition Schema (`UrbanFlowGraph`)
+
 Used to serialize synthetic or real (Kochi) road networks.
 
 ```json
@@ -91,6 +94,7 @@ Used to serialize synthetic or real (Kochi) road networks.
 ```
 
 ### 2.2 Traffic Demand Matrix Schema (`TrafficDemand`)
+
 Defines the Origin-Destination (OD) volume matrix.
 
 ```json
@@ -108,6 +112,7 @@ Defines the Origin-Destination (OD) volume matrix.
 ```
 
 ### 2.3 Simulation Result Schema (`SimulationResult`)
+
 The output returned by the simulation engine for both baseline and intervention runs.
 
 ```json
@@ -146,6 +151,7 @@ The output returned by the simulation engine for both baseline and intervention 
 ```
 
 ### 2.4 Intervention Request & Comparison Schema (`InterventionPayload`)
+
 Sent by the frontend to test a road modification.
 
 ```json
@@ -187,17 +193,20 @@ Sent by the frontend to test a road modification.
 To prevent merge conflicts and enable simultaneous development:
 
 ### 3.1 Repository Structure Isolation
+
 - **Person A Working Root**: `frontend/` and `data/raw/` + `data/processed/`
 - **Person B Working Root**: `backend/` and `data/synthetic/`
 - **Shared Agreement**: `specs/` (immutable contracts once approved).
 
 ### 3.2 Branching Model
+
 - `main`: Production/Demo branch. Only working, tested integration code is merged here.
 - `feat/person-a-frontend-map`: Frontend React/Vite app, Map UI, visualization widgets, OSMnx data extraction scripts.
 - `feat/person-b-backend-engine`: Python FastAPI, traffic assignment simulator, BPR models, intervention evaluator.
 - `contract/mock-api`: Contains shared mock fixtures in `specs/fixtures/` and a mock API server so Person A never waits for Person B.
 
 ### 3.3 Mock-First Development Rule
+
 1. Before Person B writes the full simulation algorithms, a lightweight mock endpoint returning static fixture JSONs is provided in `backend/app/api/mock_routes.py`.
 2. Person A uses this mock API immediately to build and test the full React/Map experience.
 3. Person B replaces the mock engine with the real algorithmic implementation in parallel.
