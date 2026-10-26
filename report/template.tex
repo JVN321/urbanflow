@@ -1,0 +1,395 @@
+\documentclass[12pt,a4paper]{report}
+
+% -------------------------------------------------------------
+% UNIVERSAL FONT & COMPILER SETUP (XeLaTeX / LuaLaTeX / pdfLaTeX)
+% -------------------------------------------------------------
+\usepackage{iftex}
+\ifxetex
+  \usepackage{fontspec}
+  \setmainfont{Liberation Serif}
+\else\ifluatex
+  \usepackage{fontspec}
+  \setmainfont{Liberation Serif}
+\else
+  \usepackage[utf8]{inputenc}
+  \usepackage[T1]{fontenc}
+  \usepackage{mathptmx}
+\fi\fi
+
+% -------------------------------------------------------------
+% PAGE GEOMETRY & SPACING (Matching College Template)
+% -------------------------------------------------------------
+\usepackage[left=1.25in,right=1in,top=1in,bottom=1in]{geometry}
+\usepackage{setspace}
+\setstretch{1.25}
+\setlength{\parindent}{1.5em}
+\setlength{\parskip}{0.3em}
+\raggedbottom
+
+% Float placement optimization to eliminate empty whitespace
+\renewcommand{\topfraction}{0.9}
+\renewcommand{\bottomfraction}{0.8}
+\renewcommand{\textfraction}{0.1}
+\renewcommand{\floatpagefraction}{0.75}
+\setlength{\textfloatsep}{12pt plus 2pt minus 2pt}
+\setlength{\floatsep}{10pt plus 2pt minus 2pt}
+\setlength{\intextsep}{10pt plus 2pt minus 2pt}
+
+% -------------------------------------------------------------
+% MATHEMATICS & ALGORITHMS
+% -------------------------------------------------------------
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{bm}
+
+% -------------------------------------------------------------
+% GRAPHICS, TABLES & CAPTION STYLING
+% -------------------------------------------------------------
+\usepackage{graphicx}
+\graphicspath{{figures/}{report/figures/}}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{caption}
+\usepackage{subcaption}
+\captionsetup{font={small,rm},labelfont=bf,skip=5pt}
+
+% -------------------------------------------------------------
+% HEADERS & FOOTERS (Matching College Template)
+% -------------------------------------------------------------
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[R]{\small\nouppercase{\leftmark}}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0pt}
+\setlength{\headheight}{15pt}
+
+\fancypagestyle{plain}{
+  \fancyhf{}
+  \fancyfoot[C]{\thepage}
+  \renewcommand{\headrulewidth}{0pt}
+}
+
+% -------------------------------------------------------------
+% CHAPTER AND SECTION HEADING FORMATTING (Matching College Template)
+% -------------------------------------------------------------
+\usepackage{titlesec}
+\titleformat{\chapter}[display]
+  {\normalfont\Large\bfseries\centering}
+  {\MakeUppercase{\chaptertitlename}\ \thechapter}
+  {10pt}
+  {\Large\bfseries\MakeUppercase}
+\titlespacing*{\chapter}{0pt}{-10pt}{25pt}
+
+\titleformat{\section}
+  {\normalfont\large\bfseries}{\thesection}{1em}{}
+\titlespacing*{\section}{0pt}{14pt}{6pt}
+
+\titleformat{\subsection}
+  {\normalfont\normalsize\bfseries}{\thesubsection}{1em}{}
+\titlespacing*{\subsection}{0pt}{10pt}{4pt}
+
+% -------------------------------------------------------------
+% HYPERREF SETUP
+% -------------------------------------------------------------
+\usepackage{xcolor}
+\definecolor{navyblue}{RGB}{20,50,110}
+\usepackage[
+  colorlinks=true,
+  linkcolor=navyblue,
+  citecolor=navyblue,
+  urlcolor=navyblue,
+  pdfstartview=FitH
+]{hyperref}
+
+% -------------------------------------------------------------
+% DOCUMENT METADATA DEFINITIONS
+% -------------------------------------------------------------
+\newcommand{\projecttitle}{COURSE PROJECT TITLE IN ALL CAPS}
+\newcommand{\shorttitle}{Short Project Title}
+\newcommand{\coursecode}{PBXXXX00}
+\newcommand{\coursename}{COURSE NAME}
+\newcommand{\degree}{Bachelor of Technology}
+\newcommand{\branch}{Artificial Intelligence and Data Science}
+\newcommand{\department}{Department of Artificial Intelligence and Data Science}
+\newcommand{\institution}{Muthoot Institute of Technology and Science (MITS)}
+\newcommand{\affiliation}{(Autonomous, Affiliated to APJ Abdul Kalam Technological University)}
+\newcommand{\location}{Varikoli, Ernakulam, Kerala}
+\newcommand{\monthyear}{OCTOBER 2026}
+\newcommand{\academicyear}{2026--27}
+\newcommand{\facultyincharge}{Faculty Name}
+
+\begin{document}
+
+% =============================================================
+% PAGE 1: TITLE PAGE (Matching College Template)
+% =============================================================
+\begin{titlepage}
+\thispagestyle{empty}
+\centering
+\setstretch{1.2}
+
+\vspace*{0.3cm}
+{\Large\bfseries \projecttitle \par}
+\vspace{1.2cm}
+
+{\large A COURSE PROJECT REPORT \par}
+\vspace{0.4cm}
+{\normalsize submitted by \par}
+\vspace{0.4cm}
+{\large\bfseries STUDENT ONE (MUT24XX000) \par}
+{\large\bfseries STUDENT TWO (MUT24XX000) \par}
+{\large\bfseries STUDENT THREE (MUT24XX000) \par}
+{\large\bfseries STUDENT FOUR (MUT24XX000) \par}
+\vspace{1.0cm}
+
+{\normalsize as part of the course \par}
+\vspace{0.3cm}
+{\large\bfseries \coursecode\ -- \coursename \par}
+\vspace{1.0cm}
+
+{\normalsize to \par}
+\vspace{0.3cm}
+{\normalsize The APJ Abdul Kalam Technological University in partial fulfilment of the\\
+requirements for the award of the Degree of \par}
+\vspace{0.3cm}
+{\large\bfseries \degree \par}
+{\normalsize in \par}
+{\large\bfseries \branch \par}
+\vfill
+\includegraphics[width=2.0in]{figures/college_logo.png} \par
+\vspace{0.4cm}
+{\normalsize \department \par}
+\vspace{0.2cm}
+{\large\bfseries \institution \par}
+{\normalsize \location \par}
+\vspace{0.4cm}
+{\normalsize \monthyear \par}
+\end{titlepage}
+
+% =============================================================
+% PAGE 2: CERTIFICATE (Matching College Template)
+% =============================================================
+\newpage
+\thispagestyle{empty}
+\setstretch{1.3}
+
+\begin{center}
+    \vspace*{1.0cm}
+    {\Large\bfseries CERTIFICATE \par}
+    \vspace{1.2cm}
+\end{center}
+
+\noindent This is to certify that the report entitled \textbf{``\projecttitle''}, submitted by \textbf{STUDENT ONE (MUT24XX000)}, \textbf{STUDENT TWO (MUT24XX000)}, \textbf{STUDENT THREE (MUT24XX000)}, and \textbf{STUDENT FOUR (MUT24XX000)} to \textbf{\institution} for the award of the degree of \textbf{\degree} in \textbf{\branch}, is a bonafide record of the course project work carried out by them, as part of the course \textbf{\coursecode\ -- \coursename}, under my supervision and guidance.
+
+\vspace{3.2cm}
+
+\noindent
+\begin{tabularx}{\textwidth}{@{}X r@{}}
+\textbf{Place:} Varikoli & \textbf{Faculty-in-Charge} \\
+\textbf{Date:} 22/10/2026 & \department
+\end{tabularx}
+
+% =============================================================
+% PRELIMINARY PAGES: ABSTRACT, CO-PO MATRIX & SDG (Compact)
+% =============================================================
+\newpage
+\pagenumbering{roman}
+\setcounter{page}{2}
+\setstretch{1.15}
+
+\begin{center}
+    {\large\bfseries ABSTRACT \par}
+    \vspace{0.2cm}
+\end{center}
+\addcontentsline{toc}{chapter}{Abstract}
+
+\noindent [Abstract text goes here -- a concise, self-contained summary of the problem background, mathematical/computational methods, dataset scope, key simulation results, and practical engineering significance.]
+
+\vspace{0.5cm}
+\begin{center}
+    {\large\bfseries CO -- PO / PSO ARTICULATION MATRIX \par}
+    \vspace{0.2cm}
+\end{center}
+\addcontentsline{toc}{chapter}{CO -- PO / PSO Articulation Matrix}
+
+\noindent Course Outcomes (COs) addressed by this project:
+\begin{itemize}
+  \setlength{\itemsep}{0pt}
+  \setlength{\parskip}{0pt}
+  \item \textbf{CO1:} Explain fundamental graph concepts and algorithms to analyse and solve problems.
+  \item \textbf{CO2:} Illustrate matching and covering problems in graphs using algorithms and theorems.
+  \item \textbf{CO3:} Apply connectivity and paths including Network Flow and Max-Flow Min-Cut Theorem.
+  \item \textbf{CO4:} Illustrate Vertex Coloring, Upper Bounds, Brooks' Theorem, and Color-Critical Graphs.
+  \item \textbf{CO5:} Apply concepts of planar graphs, Kuratowski's and Wagner's theorems, TSP, and dominating sets.
+\end{itemize}
+
+\begin{table}[htbp]
+\centering
+\caption{Course Outcomes to Program Outcomes Articulation Matrix}
+\label{tab:co_po_matrix_template}
+{\small\setlength{\tabcolsep}{2.5pt}
+\begin{tabularx}{\textwidth}{l*{12}{>{\centering\arraybackslash}X}}
+\toprule
+\textbf{CO} & \textbf{PO1} & \textbf{PO2} & \textbf{PO3} & \textbf{PO4} & \textbf{PO5} & \textbf{PO6} & \textbf{PO7} & \textbf{PO8} & \textbf{PO9} & \textbf{PO10} & \textbf{PO11} & \textbf{PO12} \\
+\midrule
+CO1 & 3 & 3 & 3 & 3 & - & - & - & - & - & - & - & - \\
+CO2 & 3 & 3 & 3 & - & - & - & - & - & - & - & - & - \\
+CO3 & 3 & 3 & 3 & 3 & - & - & - & - & - & - & - & - \\
+CO4 & 3 & 3 & 3 & 3 & - & - & - & - & - & - & - & - \\
+CO5 & 3 & 3 & 3 & - & - & - & - & - & - & - & - & - \\
+\bottomrule
+\end{tabularx}}
+\end{table}
+
+\vspace{0.4cm}
+\begin{center}
+    {\large\bfseries SUSTAINABLE DEVELOPMENT GOALS (SDG) ADDRESSED \par}
+    \vspace{0.2cm}
+\end{center}
+\addcontentsline{toc}{chapter}{Sustainable Development Goals (SDG) Addressed}
+
+\begin{table}[htbp]
+\centering
+\caption{Sustainable Development Goals Alignment}
+\label{tab:sdg_template}
+{\small\setlength{\tabcolsep}{4pt}
+\begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}p{2.6cm}>{\raggedright\arraybackslash}p{3.8cm}X}
+\toprule
+\textbf{Goal} & \textbf{Target} & \textbf{Justification} \\
+\midrule
+\textbf{SDG 11:}\newline Sustainable Cities & 
+\textbf{Target 11.2:}\newline Safe, sustainable transport systems. & 
+[Project contribution to sustainable mobility and infrastructure optimization.] \\
+\addlinespace
+\textbf{SDG 9:}\newline Industry \& Infrastructure & 
+\textbf{Target 9.1:}\newline Quality, reliable infrastructure. & 
+[Project contribution to resilient infrastructure design and capital efficiency.] \\
+\bottomrule
+\end{tabularx}}
+\end{table}
+
+% =============================================================
+% TABLE OF CONTENTS, LIST OF FIGURES, LIST OF TABLES
+% =============================================================
+\newpage
+\setstretch{1.15}
+\tableofcontents
+
+\newpage
+\begingroup
+\let\clearpage\relax
+\listoffigures
+\vspace{0.8cm}
+\listoftables
+\endgroup
+
+% =============================================================
+% MAIN CONTENT CHAPTERS (Arabic Numerals, Continuous Section Flow)
+% =============================================================
+\newpage
+\pagenumbering{arabic}
+\setcounter{page}{1}
+\setstretch{1.25}
+
+\chapter{Introduction}
+\label{chap:intro}
+
+\section{Background and Context}
+[Provide introductory background on the domain and application.]
+
+\section{Motivation}
+[Describe the motivation for employing computational graph algorithms.]
+
+\section{Scope of the Project}
+[Delineate the explicit engineering scope.]
+
+\section{Organization of the Report}
+[Brief chapter-by-chapter outline of the report.]
+
+\chapter{Problem Definition and Objectives}
+\label{chap:problem}
+
+\section{Problem Statement}
+[State the exact mathematical/algorithmic problem statement.]
+
+\section{Objectives}
+\begin{itemize}
+  \item Objective 1
+  \item Objective 2
+  \item Objective 3
+  \item Objective 4
+\end{itemize}
+
+\chapter{Dataset and Network Preprocessing}
+\label{chap:dataset}
+
+\section{Data Acquisition}
+[Describe source data extraction and preprocessing pipeline.]
+
+\section{Graph Model Formulation}
+[Define the vertex and directed edge attributes.]
+
+\chapter{Exploratory Graph Analysis}
+\label{chap:eda}
+
+\section{Topological Properties}
+[Examine degree distributions, sparsity, clustering, and connectivity.]
+
+\chapter{Algorithmic Methodology}
+\label{chap:methodology}
+
+\section{Core Algorithms}
+[Detail mathematical formulations, equilibrium conditions, and search heuristics.]
+
+\chapter{Experimental Results and Performance Analysis}
+\label{chap:results}
+
+\section{Evaluation Metrics}
+[Define quantitative performance indicators.]
+
+\section{Comparative Experimental Results}
+[Present experimental results across baseline and surge traffic scenarios.]
+
+\chapter{System Architecture and Implementation}
+\label{chap:implementation}
+
+\section{Architecture Overview}
+[Detail system components, backend APIs, and frontend GIS interface.]
+
+\chapter{Discussion and Sensitivity Analysis}
+\label{chap:discussion}
+
+\section{Engineering Insights}
+[Interpret systemic implications, physical tradeoffs, and computational scaling.]
+
+\chapter{Limitations and Future Research}
+\label{chap:limitations}
+
+\section{Limitations}
+[State theoretical or empirical boundary conditions.]
+
+\section{Future Directions}
+[Outline future extensions and research avenues.]
+
+\chapter{Conclusion}
+\label{chap:conclusion}
+[Summarize project achievements, concrete findings, and engineering takeaways.]
+
+% =============================================================
+% REFERENCES
+% =============================================================
+\newpage
+\begin{thebibliography}{99}
+\addcontentsline{toc}{chapter}{References}
+
+\bibitem{ref1}
+Author Name,
+\newblock ``Paper or Book Title,''
+\newblock {\em Journal / Publisher}, vol.~1, no.~1, pp.~1--10, 2026.
+
+\end{thebibliography}
+
+\end{document}

@@ -33,3 +33,14 @@ cache/
 data/raw/*.osm
 data/raw/*.pbf
 
+# LaTeX Build Artifacts
+*.aux
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.xdv
+*.toc
+*.lof
+*.lot
+*.out
+missfont.log
