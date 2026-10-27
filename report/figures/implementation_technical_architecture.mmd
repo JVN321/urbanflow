@@ -1,0 +1,28 @@
+%%{init: {'theme': 'neutral', 'themeVariables': {'fontSize': '14px', 'fontFamily': 'DejaVu Sans, sans-serif'}}}%%
+flowchart TD
+    subgraph L1 ["1. Frontend Presentation Layer (Web GIS Dashboard)"]
+        direction LR
+        C1["React 18 & TypeScript"] --> C2["MapLibre GL JS"] --> C3["Zustand State Store"] --> C4["Deck.gl / Canvas Overlay"]
+    end
+
+    subgraph L2 ["2. API Gateway & Routing Layer (FastAPI)"]
+        direction LR
+        A1["FastAPI Application"] --> A2["Uvicorn ASGI Server"] --> A3["Pydantic Data Models"] --> A4["REST API Endpoints"]
+    end
+
+    subgraph L3 ["3. Core Simulation & Optimization Engine"]
+        direction LR
+        E1["Vectorized BPR Delay Model"] --> E2["Rustworkx Dijkstra Min-Heap"] --> E3["MSA Equilibrium Loop"] --> E4["Combinatorial Search Optimizer"]
+    end
+
+    subgraph L4 ["4. Geospatial Data & Storage Layer"]
+        direction LR
+        D1["OpenStreetMap Raw Ways"] --> D2["OSMnx Graph Ingestion"] --> D3["GraphML / GeoJSON Cache"] --> D4["IRC:106 Capacity Standards"]
+    end
+
+    L1 ==>|"HTTP / JSON Requests (Scenarios & Interventions)"| L2
+    L2 ==>|"Execute Simulation & Optimization Tasks"| L3
+    L3 ==>|"Query Network Topology & Link Capacities"| L4
+    L4 -.->|"Cached Graph Model & IRC Attributes"| L3
+    L3 -.->|"User-Equilibrium Flows & Delay Metrics"| L2
+    L2 -.->|"GeoJSON Vector Data & KPI Payloads"| L1

@@ -1,0 +1,13 @@
+%%{init: {'theme': 'neutral', 'themeVariables': {'fontSize': '15px', 'fontFamily': 'DejaVu Sans, sans-serif'}}}%%
+flowchart TD
+    subgraph P1 ["Phase A: Network & Traffic Demand Setup"]
+        direction LR
+        S1["Stage 1: Geospatial Data Ingestion & Preprocessing"] --> S2["Stage 2: Traffic Demand Generation & Matrix Setup"] --> S3["Stage 3: Equilibrium Traffic Assignment Engine"]
+    end
+
+    subgraph P2 ["Phase B: Analysis, Optimization & Visualization"]
+        direction LR
+        S4["Stage 4: Congestion & Bottleneck Analysis"] --> S5["Stage 5: Combinatorial Network Optimizer"] --> S6["Stage 6: GIS Visualization & Decision Support"]
+    end
+
+    P1 ==>|"Equilibrium Traffic Flows & Link Traversal Latencies"| P2
